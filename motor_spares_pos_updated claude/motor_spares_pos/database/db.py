@@ -73,7 +73,15 @@ class DatabaseManager:
         Returns:
             sqlite3.Connection: Database connection with row factory
         """
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        logger.info(f"Opening SQLite connection at: {self.db_path}")
+        db_dir = os.path.dirname(self.db_path)
+        logger.info(f"Database dir exists: {os.path.exists(db_dir)}, isdir: {os.path.isdir(db_dir)}")
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
+        except Exception as e:
+            logger.error(f"Failed to open SQLite DB at {self.db_path}: {e}")
+            raise
+
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 10000")
