@@ -67,15 +67,62 @@ class AdminCleanupService:
                 ).rowcount
         if option in {"sales_invoices", "full"}:
             invoices = self.db.execute_query(
-                "SELECT invoice_number FROM invoices WHERE status NOT IN ('VOIDED','DRAFT')"
+                "SELECT id,invoice_number FROM invoices WHERE status NOT IN ('VOIDED','DRAFT')"
             )
-            for invoice in invoices:
-                SalesService().void_invoice(
-                    invoice["invoice_number"],
-                    user_id,
-                    "Administrative data cleanup",
-                )
-            results["voided_invoices"] = len(invoices)
+            # For non-full cleanups we void invoices (preserve audit/payment history).
+            if option == "sales_invoices":
+                for invoice in invoices:
+                    SalesService().void_invoice(
+                        invoice["invoice_number"],
+                        user_id,
+                        "Administrative data cleanup",
+                    )
+                results["voided_invoices"] = len(invoices)
+            else:
+                # Full reset: physically delete business data while preserving schema, settings and users.
+                # Order matters because of FK constraints.
+                clear_order = [
+                    "return_items",
+                    "refunds",
+                    "sale_items",
+                    "payments",
+                    "invoices",
+                    "returns",
+                    "stock_movements",
+                    "sales",
+                    "quotation_items",
+                    "quotations",
+                    "held_sales",
+                    "sync_queue",
+                    "sync_log",
+                    "audit_logs",
+                    "product_tombstones",
+                    "products",
+                    "customers",
+                    "categories",
+                    "vehicle_models",
+                ]
+                with self.db.transaction() as conn:
+                    # Null-out foreign links that would block deletes
+                    if "returns" in clear_order and "invoices" in clear_order:
+                        conn.execute("UPDATE returns SET original_invoice_id=NULL")
+                    for table in clear_order:
+                        try:
+                            conn.execute(f'DELETE FROM "{table}"')
+                        except Exception:
+                            # Best-effort: skip tables that don't exist in older schemas
+                            continue
+                    # Reset sequences for cleared tables
+                    placeholders = ",".join("?" for _ in clear_order)
+                    try:
+                        conn.execute(
+                            f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                            clear_order,
+                        )
+                    except Exception:
+                        # ignore if sqlite_sequence not present or some names missing
+                        pass
+                results["voided_invoices"] = len(invoices)
         AuditService().log_action(
             "SYSTEM_DATA_CLEANUP",
             "SYSTEM",

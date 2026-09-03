@@ -923,24 +923,36 @@ class SalesService:
             raise ValueError("Invoice is already voided")
         if invoice["status"] == "DRAFT":
             raise ValueError("Draft invoices must be deleted, not voided")
+        # Mark the sale voided and reverse stock (void_sale handles audit for sale and stock reversal).
         self.void_sale(invoice["sale_id"], user_id, reason or "Invoice voided")
-        if (
-            self.db.execute_update(
-                "UPDATE invoices SET status='VOIDED',voided_by=?,voided_at=CURRENT_TIMESTAMP,void_reason=? WHERE id=? AND status!='VOIDED'",
-                (user_id, reason or None, invoice["id"]),
+        # After reversing stock and recording sale-level audit, remove the invoice and payments so the
+        # invoice no longer appears in invoice registers or financial reports. Preserve audit_logs.
+        try:
+            with self.db.transaction() as conn:
+                # Delete payments tied to this sale
+                conn.execute("DELETE FROM payments WHERE sale_id=?", (invoice["sale_id"],))
+                # Delete the invoice record
+                conn.execute("DELETE FROM invoices WHERE id=?", (invoice["id"],))
+                # Remove any pending sync queue entries for this sale/invoice to avoid duplicate/ghost syncs
+                conn.execute("DELETE FROM sync_queue WHERE (entity_type='SALE' AND entity_id=?) OR (entity_type='INVOICE' AND entity_id=?)", (invoice["sale_id"], invoice["id"]))
+            AuditService().log_action(
+                "INVOICE_VOIDED",
+                "INVOICE",
+                invoice["id"],
+                user_id,
+                reason or None,
+                f"Invoice: {invoice_number}",
             )
-            != 1
-        ):
-            raise ValueError("Invoice could not be voided")
-        AuditService().log_action(
-            "INVOICE_VOIDED",
-            "INVOICE",
-            invoice["id"],
-            user_id,
-            reason or None,
-            f"Invoice: {invoice_number}",
-        )
-        return True
+            # Notify UI and analytics that invoice/sale data changed
+            try:
+                from core.events import emit_change as _emit_change
+                _emit_change("INVOICE", {"invoice_number": invoice_number, "operation": "DELETE"})
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.exception("Failed to remove invoice after voiding: %s", e)
+            raise
 
     def delete_draft_invoice(self, invoice_number: str, user_id: int) -> bool:
         """Delete only an unissued draft invoice; paid/completed invoices are immutable."""

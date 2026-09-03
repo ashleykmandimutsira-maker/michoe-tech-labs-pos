@@ -4134,6 +4134,15 @@ class SettingsPage(QWidget):
         )
         if not ok or confirm.strip().upper() != "RESET SYSTEM":
             return
+        # Stronger confirmation for full reset
+        if option == "full":
+            confirm_all, ok_all = QInputDialog.getText(
+                self,
+                "Confirm full reset",
+                "FULL RESET is destructive. Type RESET ALL to proceed:",
+            )
+            if not ok_all or confirm_all.strip().upper() != "RESET ALL":
+                return
         option = {
             "Clear inventory (archive active products)": "inventory",
             "Clear customers (archive customers and vehicles)": "customers",
