@@ -18,7 +18,9 @@ from core.clock import now_str
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CANONICAL_DATABASE_PATH = Path(__file__).resolve().parents[3] / "data" / "pos.db"
+CANONICAL_DATABASE_PATH = (
+    Path(__file__).resolve().parents[3] / "data" / "pos.db"
+)
 
 
 class DatabaseManager:
@@ -27,7 +29,7 @@ class DatabaseManager:
     def __init__(self, db_path: str = "data/pos.db"):
         """
         Initialize the database manager.
-        
+
         Args:
             db_path: Path to the SQLite database file
         """
@@ -67,7 +69,7 @@ class DatabaseManager:
     def get_connection(self) -> sqlite3.Connection:
         """
         Get a new SQLite database connection.
-        
+
         Returns:
             sqlite3.Connection: Database connection with row factory
         """
@@ -82,10 +84,10 @@ class DatabaseManager:
     def get_db(self) -> Generator[sqlite3.Connection, None, None]:
         """
         Context manager for database connections.
-        
+
         Yields:
             sqlite3.Connection: Database connection
-            
+
         Usage:
             with db_manager.get_db() as conn:
                 cursor = conn.cursor()
@@ -124,7 +126,7 @@ class DatabaseManager:
                 schema_sql = get_schema()
                 cursor.executescript(schema_sql)
                 logger.info("Database schema initialized successfully")
-                
+
                 # Initialize default roles and permissions
                 init_sql = get_initialization_sql()
                 cursor.executescript(init_sql)
@@ -136,7 +138,7 @@ class DatabaseManager:
                 self._apply_phase6_migrations(cursor)
                 self._apply_phase7_migrations(cursor)
                 self._record_migration(cursor, 1)
-                
+
                 self._initialized = True
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
@@ -147,11 +149,11 @@ class DatabaseManager:
     ) -> list[sqlite3.Row]:
         """
         Execute a SELECT query and return results.
-        
+
         Args:
             query: SQL query string
             params: Query parameters
-            
+
         Returns:
             list of sqlite3.Row objects
         """
@@ -169,11 +171,11 @@ class DatabaseManager:
     ) -> int:
         """
         Execute an INSERT/UPDATE/DELETE query.
-        
+
         Args:
             query: SQL query string
             params: Query parameters
-            
+
         Returns:
             Number of affected rows
         """
@@ -187,16 +189,14 @@ class DatabaseManager:
             self._last_insert_id.value = cursor.lastrowid
             return cursor.rowcount
 
-    def execute_many(
-        self, query: str, params_list: list[tuple]
-    ) -> int:
+    def execute_many(self, query: str, params_list: list[tuple]) -> int:
         """
         Execute multiple INSERT/UPDATE/DELETE queries.
-        
+
         Args:
             query: SQL query string
             params_list: List of parameter tuples
-            
+
         Returns:
             Number of affected rows
         """
@@ -214,34 +214,81 @@ class DatabaseManager:
     def get_last_insert_id(self) -> int:
         """
         Get the ID of the last inserted row.
-        
+
         Returns:
             Last insert rowid
         """
         insert_id = getattr(self._last_insert_id, "value", None)
         if insert_id is None:
-            raise RuntimeError("No insert has been executed in this database manager")
+            raise RuntimeError(
+                "No insert has been executed in this database manager"
+            )
         return insert_id
 
     @staticmethod
     def _apply_phase2_migrations(cursor: sqlite3.Cursor) -> None:
         """Add Phase 2 columns safely when opening an existing database."""
         additions = {
-            "products": {"oem_number": "TEXT", "vehicle_year_from": "INTEGER", "vehicle_year_to": "INTEGER"},
-            "sales": {"customer_name": "TEXT", "customer_phone": "TEXT", "customer_email": "TEXT", "customer_city": "TEXT", "vehicle_make": "TEXT", "vehicle_model": "TEXT", "vehicle_registration": "TEXT", "cashier_name": "TEXT"},
-            "returns": {"original_invoice_number": "TEXT", "customer_name": "TEXT", "customer_phone": "TEXT"},
-            "sync_queue": {"synced_at": "TIMESTAMP", "retry_count": "INTEGER DEFAULT 0"},
-            "sync_log": {"queue_id": "INTEGER", "success": "BOOLEAN", "server_response": "TEXT"},
-            "customers": {"email": "TEXT", "city": "TEXT", "vehicle_make": "TEXT", "vehicle_model": "TEXT", "vehicle_registration": "TEXT"},
-            "invoices": {"customer_id": "INTEGER", "customer_email": "TEXT", "customer_city": "TEXT", "vehicle_make": "TEXT", "vehicle_model": "TEXT", "vehicle_registration": "TEXT"},
+            "products": {
+                "oem_number": "TEXT",
+                "vehicle_year_from": "INTEGER",
+                "vehicle_year_to": "INTEGER",
+            },
+            "sales": {
+                "customer_name": "TEXT",
+                "customer_phone": "TEXT",
+                "customer_email": "TEXT",
+                "customer_city": "TEXT",
+                "vehicle_make": "TEXT",
+                "vehicle_model": "TEXT",
+                "vehicle_registration": "TEXT",
+                "cashier_name": "TEXT",
+            },
+            "returns": {
+                "original_invoice_number": "TEXT",
+                "customer_name": "TEXT",
+                "customer_phone": "TEXT",
+            },
+            "sync_queue": {
+                "synced_at": "TIMESTAMP",
+                "retry_count": "INTEGER DEFAULT 0",
+            },
+            "sync_log": {
+                "queue_id": "INTEGER",
+                "success": "BOOLEAN",
+                "server_response": "TEXT",
+            },
+            "customers": {
+                "email": "TEXT",
+                "city": "TEXT",
+                "vehicle_make": "TEXT",
+                "vehicle_model": "TEXT",
+                "vehicle_registration": "TEXT",
+            },
+            "invoices": {
+                "customer_id": "INTEGER",
+                "customer_email": "TEXT",
+                "customer_city": "TEXT",
+                "vehicle_make": "TEXT",
+                "vehicle_model": "TEXT",
+                "vehicle_registration": "TEXT",
+            },
         }
         for table, columns in additions.items():
-            existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+            existing = {
+                row[1] for row in cursor.execute(f"PRAGMA table_info({table})")
+            }
             for column, definition in columns.items():
                 if column not in existing:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_oem_number ON products(oem_number)")
-                cursor.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)")
+                    cursor.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                    )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_products_oem_number ON products(oem_number)"
+                )
+                cursor.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)"
+                )
 
         cursor.execute(
             "UPDATE returns SET original_invoice_id = "
@@ -284,15 +331,25 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_quotations_status ON quotations(status, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_quotation_items_quote ON quotation_items(quotation_id);
         """)
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)")
+        cursor.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)"
+        )
 
     @staticmethod
     def _apply_phase4_migrations(cursor: sqlite3.Cursor) -> None:
         """Add CRM fields and multi-vehicle support without altering financial history."""
-        existing = {row[1] for row in cursor.execute("PRAGMA table_info(customers)")}
-        for column, definition in {"customer_code": "TEXT", "company": "TEXT", "active": "BOOLEAN NOT NULL DEFAULT 1"}.items():
+        existing = {
+            row[1] for row in cursor.execute("PRAGMA table_info(customers)")
+        }
+        for column, definition in {
+            "customer_code": "TEXT",
+            "company": "TEXT",
+            "active": "BOOLEAN NOT NULL DEFAULT 1",
+        }.items():
             if column not in existing:
-                cursor.execute(f"ALTER TABLE customers ADD COLUMN {column} {definition}")
+                cursor.execute(
+                    f"ALTER TABLE customers ADD COLUMN {column} {definition}"
+                )
         cursor.executescript("""
             CREATE TABLE IF NOT EXISTS vehicles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL,
@@ -308,44 +365,97 @@ class DatabaseManager:
             CREATE INDEX IF NOT EXISTS idx_vehicles_search ON vehicles(registration_number, vin, make, model);
         """)
         for table in ("sales", "invoices", "returns", "quotations"):
-            table_columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+            table_columns = {
+                row[1] for row in cursor.execute(f"PRAGMA table_info({table})")
+            }
             if "vehicle_id" not in table_columns:
-                cursor.execute(f"ALTER TABLE {table} ADD COLUMN vehicle_id INTEGER")
-            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_vehicle ON {table}(vehicle_id)")
-        cursor.execute("UPDATE customers SET customer_code=printf('CUS-%06d', id) WHERE customer_code IS NULL OR customer_code='' ")
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)")
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN vehicle_id INTEGER"
+                )
+            cursor.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{table}_vehicle ON {table}(vehicle_id)"
+            )
+        cursor.execute(
+            "UPDATE customers SET customer_code=printf('CUS-%06d', id) WHERE customer_code IS NULL OR customer_code='' "
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)"
+        )
 
     @staticmethod
     def _apply_phase5_migrations(cursor: sqlite3.Cursor) -> None:
         """Add document lifecycle fields without changing existing documents."""
-        for table, additions in {"quotations": {"issued_at": "TIMESTAMP", "expires_at": "TIMESTAMP"}, "sales": {"quotation_id": "INTEGER"}}.items():
-            existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+        for table, additions in {
+            "quotations": {
+                "issued_at": "TIMESTAMP",
+                "expires_at": "TIMESTAMP",
+            },
+            "sales": {"quotation_id": "INTEGER"},
+        }.items():
+            existing = {
+                row[1] for row in cursor.execute(f"PRAGMA table_info({table})")
+            }
             for column, definition in additions.items():
                 if column not in existing:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_quotations_search ON quotations(quote_number, status, created_at DESC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_quotation ON sales(quotation_id)")
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)")
+                    cursor.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                    )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_quotations_search ON quotations(quote_number, status, created_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sales_quotation ON sales(quotation_id)"
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)"
+        )
 
     @staticmethod
     def _apply_phase6_migrations(cursor: sqlite3.Cursor) -> None:
         """Add non-destructive invoice void attribution to existing records."""
-        existing = {row[1] for row in cursor.execute("PRAGMA table_info(invoices)")}
-        for column, definition in {"voided_by": "INTEGER", "voided_at": "TIMESTAMP", "void_reason": "TEXT"}.items():
+        existing = {
+            row[1] for row in cursor.execute("PRAGMA table_info(invoices)")
+        }
+        for column, definition in {
+            "voided_by": "INTEGER",
+            "voided_at": "TIMESTAMP",
+            "void_reason": "TEXT",
+        }.items():
             if column not in existing:
-                cursor.execute(f"ALTER TABLE invoices ADD COLUMN {column} {definition}")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)")
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)")
+                cursor.execute(
+                    f"ALTER TABLE invoices ADD COLUMN {column} {definition}"
+                )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)"
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)"
+        )
 
     @staticmethod
     def _apply_phase7_migrations(cursor: sqlite3.Cursor) -> None:
         """Add nullable fiscal-readiness metadata; no FDMS response is fabricated."""
-        existing = {row[1] for row in cursor.execute("PRAGMA table_info(invoices)")}
-        fields = {"fiscal_device_id": "TEXT", "fiscal_day_number": "TEXT", "fdms_invoice_number": "TEXT", "fiscal_verification_code": "TEXT", "qr_code_data": "TEXT", "fiscal_submission_status": "TEXT", "fiscal_validation_status": "TEXT", "fiscalised_at": "TIMESTAMP"}
+        existing = {
+            row[1] for row in cursor.execute("PRAGMA table_info(invoices)")
+        }
+        fields = {
+            "fiscal_device_id": "TEXT",
+            "fiscal_day_number": "TEXT",
+            "fdms_invoice_number": "TEXT",
+            "fiscal_verification_code": "TEXT",
+            "qr_code_data": "TEXT",
+            "fiscal_submission_status": "TEXT",
+            "fiscal_validation_status": "TEXT",
+            "fiscalised_at": "TIMESTAMP",
+        }
         for column, definition in fields.items():
             if column not in existing:
-                cursor.execute(f"ALTER TABLE invoices ADD COLUMN {column} {definition}")
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)")
+                cursor.execute(
+                    f"ALTER TABLE invoices ADD COLUMN {column} {definition}"
+                )
+        cursor.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)"
+        )
 
     @staticmethod
     def _record_migration(cursor: sqlite3.Cursor, version: int) -> None:
@@ -361,9 +471,18 @@ class DatabaseManager:
             foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
             journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
-            migration_rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
-            tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
-            counts = {row[0]: conn.execute(f'SELECT COUNT(*) FROM "{row[0]}"').fetchone()[0] for row in tables}
+            migration_rows = conn.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            counts = {
+                row[0]: conn.execute(
+                    f'SELECT COUNT(*) FROM "{row[0]}"'
+                ).fetchone()[0]
+                for row in tables
+            }
         return {
             "path": self.db_path,
             "size_bytes": os.path.getsize(self.db_path),
@@ -379,7 +498,7 @@ class DatabaseManager:
     def backup(self, backup_path: str) -> None:
         """
         Create a backup of the database.
-        
+
         Args:
             backup_path: Path where backup should be saved
         """
@@ -401,16 +520,18 @@ _db_manager: Optional[DatabaseManager] = None
 def get_database_manager(db_path: Optional[str] = None) -> DatabaseManager:
     """
     Get or create the global database manager instance.
-    
+
     Args:
         db_path: Path to the SQLite database file
-        
+
     Returns:
         DatabaseManager instance
     """
     global _db_manager
     if _db_manager is None:
-        _db_manager = DatabaseManager(str(Path(db_path) if db_path else CANONICAL_DATABASE_PATH))
+        _db_manager = DatabaseManager(
+            str(Path(db_path) if db_path else CANONICAL_DATABASE_PATH)
+        )
         _db_manager.initialize()
     return _db_manager
 

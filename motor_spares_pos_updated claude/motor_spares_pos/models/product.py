@@ -11,6 +11,7 @@ from typing import Optional
 @dataclass
 class Category:
     """Product category."""
+
     id: Optional[int] = None
     name: str = ""
     description: str = ""
@@ -21,6 +22,7 @@ class Category:
 @dataclass
 class VehicleModel:
     """Vehicle model information."""
+
     id: Optional[int] = None
     make: str = ""  # Toyota, Honda, Ford, etc.
     model: str = ""  # Corolla, Civic, Ranger, etc.
@@ -33,7 +35,7 @@ class VehicleModel:
 class Product:
     """
     Motor spares product/inventory item.
-    
+
     Attributes:
         id: Product ID (auto-generated)
         barcode: Barcode string (unique, can be None)
@@ -53,6 +55,7 @@ class Product:
         created_at: Creation timestamp
         updated_at: Last update timestamp
     """
+
     id: Optional[int] = None
     barcode: Optional[str] = None
     part_no: str = ""
@@ -90,31 +93,37 @@ class Product:
         """Calculate profit margin."""
         if self.cost_price == 0:
             return 0.0
-        return ((self.selling_price - self.cost_price) / self.selling_price) * 100
+        return (
+            (self.selling_price - self.cost_price) / self.selling_price
+        ) * 100
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'id': self.id,
-            'barcode': self.barcode,
-            'part_no': self.part_no,
-            'oem_number': self.oem_number,
-            'description': self.description,
-            'brand': self.brand,
-            'category_id': self.category_id,
-            'vehicle_make': self.vehicle_make,
-            'vehicle_model': self.vehicle_model,
-            'vehicle_year_from': self.vehicle_year_from,
-            'vehicle_year_to': self.vehicle_year_to,
-            'cost_price': self.cost_price,
-            'selling_price': self.selling_price,
-            'currency': self.currency,
-            'quantity_on_hand': self.quantity_on_hand,
-            'reorder_level': self.reorder_level,
-            'vat_rate': self.vat_rate,
-            'active': self.active,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            "id": self.id,
+            "barcode": self.barcode,
+            "part_no": self.part_no,
+            "oem_number": self.oem_number,
+            "description": self.description,
+            "brand": self.brand,
+            "category_id": self.category_id,
+            "vehicle_make": self.vehicle_make,
+            "vehicle_model": self.vehicle_model,
+            "vehicle_year_from": self.vehicle_year_from,
+            "vehicle_year_to": self.vehicle_year_to,
+            "cost_price": self.cost_price,
+            "selling_price": self.selling_price,
+            "currency": self.currency,
+            "quantity_on_hand": self.quantity_on_hand,
+            "reorder_level": self.reorder_level,
+            "vat_rate": self.vat_rate,
+            "active": self.active,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at else None
+            ),
         }
 
 
@@ -123,7 +132,7 @@ class StockMovement:
     """
     Record of a stock movement/transaction.
     Used for audit trail and inventory tracking.
-    
+
     Attributes:
         id: Movement ID
         product_id: Product that was moved
@@ -136,9 +145,12 @@ class StockMovement:
         notes: Additional notes
         created_at: Movement timestamp
     """
+
     id: Optional[int] = None
     product_id: int = 0
-    movement_type: str = ""  # PURCHASE, SALE, RETURN, ADJUSTMENT, DAMAGE, TRANSFER, VOID
+    movement_type: str = (
+        ""  # PURCHASE, SALE, RETURN, ADJUSTMENT, DAMAGE, TRANSFER, VOID
+    )
     quantity: int = 0
     previous_quantity: int = 0
     new_quantity: int = 0
@@ -148,26 +160,28 @@ class StockMovement:
     created_at: Optional[datetime] = None
 
     VALID_TYPES = {
-        'PURCHASE': 'Stock received from supplier',
-        'SALE': 'Sold to customer',
-        'RETURN': 'Returned by customer',
-        'ADJUSTMENT': 'Manual adjustment',
-        'DAMAGE': 'Damaged/destroyed',
-        'TRANSFER': 'Transferred to another location',
-        'VOID': 'Voided transaction'
+        "PURCHASE": "Stock received from supplier",
+        "SALE": "Sold to customer",
+        "RETURN": "Returned by customer",
+        "ADJUSTMENT": "Manual adjustment",
+        "DAMAGE": "Damaged/destroyed",
+        "TRANSFER": "Transferred to another location",
+        "VOID": "Voided transaction",
     }
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
-            'id': self.id,
-            'product_id': self.product_id,
-            'movement_type': self.movement_type,
-            'quantity': self.quantity,
-            'previous_quantity': self.previous_quantity,
-            'new_quantity': self.new_quantity,
-            'reference': self.reference,
-            'user_id': self.user_id,
-            'notes': self.notes,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            "id": self.id,
+            "product_id": self.product_id,
+            "movement_type": self.movement_type,
+            "quantity": self.quantity,
+            "previous_quantity": self.previous_quantity,
+            "new_quantity": self.new_quantity,
+            "reference": self.reference,
+            "user_id": self.user_id,
+            "notes": self.notes,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
         }

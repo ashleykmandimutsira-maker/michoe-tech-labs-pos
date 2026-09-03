@@ -13,6 +13,7 @@ class ReturnItem:
     """
     Individual item being returned.
     """
+
     id: Optional[int] = None
     return_id: Optional[int] = None
     sale_item_id: Optional[int] = None
@@ -38,21 +39,23 @@ class ReturnItem:
 
     def to_dict(self) -> dict:
         return {
-            'id': self.id,
-            'return_id': self.return_id,
-            'sale_item_id': self.sale_item_id,
-            'product_id': self.product_id,
-            'product_name': self.product_name,
-            'part_no': self.part_no,
-            'brand': self.brand,
-            'vehicle': f"{self.vehicle_make} {self.vehicle_model}".strip(),
-            'quantity': self.quantity,
-            'unit_price': self.unit_price,
-            'vat_rate': self.vat_rate,
-            'line_total': self.line_total,
-            'condition': self.condition,
-            'return_reason': self.return_reason,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            "id": self.id,
+            "return_id": self.return_id,
+            "sale_item_id": self.sale_item_id,
+            "product_id": self.product_id,
+            "product_name": self.product_name,
+            "part_no": self.part_no,
+            "brand": self.brand,
+            "vehicle": f"{self.vehicle_make} {self.vehicle_model}".strip(),
+            "quantity": self.quantity,
+            "unit_price": self.unit_price,
+            "vat_rate": self.vat_rate,
+            "line_total": self.line_total,
+            "condition": self.condition,
+            "return_reason": self.return_reason,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
         }
 
 
@@ -61,10 +64,13 @@ class Refund:
     """
     Refund or credit for a return.
     """
+
     id: Optional[int] = None
     return_id: Optional[int] = None
     refund_amount: float = 0.0
-    refund_method: str = ""  # CASH_USD, CASH_ZIG, ECOCASH, STORE_CREDIT, CARD_REFUND
+    refund_method: str = (
+        ""  # CASH_USD, CASH_ZIG, ECOCASH, STORE_CREDIT, CARD_REFUND
+    )
     currency: str = "ZWL"
     exchange_rate: float = 1.0
     original_payment_method: Optional[str] = None
@@ -76,18 +82,22 @@ class Refund:
 
     def to_dict(self) -> dict:
         return {
-            'id': self.id,
-            'return_id': self.return_id,
-            'refund_amount': self.refund_amount,
-            'refund_method': self.refund_method,
-            'currency': self.currency,
-            'exchange_rate': self.exchange_rate,
-            'original_payment_method': self.original_payment_method,
-            'status': self.status,
-            'processed_by': self.processed_by,
-            'notes': self.notes,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            "id": self.id,
+            "return_id": self.return_id,
+            "refund_amount": self.refund_amount,
+            "refund_method": self.refund_method,
+            "currency": self.currency,
+            "exchange_rate": self.exchange_rate,
+            "original_payment_method": self.original_payment_method,
+            "status": self.status,
+            "processed_by": self.processed_by,
+            "notes": self.notes,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at else None
+            ),
         }
 
 
@@ -97,6 +107,7 @@ class Return:
     Complete return transaction.
     Links back to original sale/invoice.
     """
+
     id: Optional[int] = None
     return_number: str = ""
     original_sale_id: int = 0
@@ -117,7 +128,9 @@ class Return:
     vat_amount: float = 0.0
     total_refund: float = 0.0
     reason: Optional[str] = None
-    status: str = "PENDING"  # PENDING, APPROVED, COMPLETED, REJECTED, CANCELLED
+    status: str = (
+        "PENDING"  # PENDING, APPROVED, COMPLETED, REJECTED, CANCELLED
+    )
     external_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -160,27 +173,31 @@ class Return:
 
     def to_dict(self) -> dict:
         return {
-            'id': self.id,
-            'return_number': self.return_number,
-            'original_sale_id': self.original_sale_id,
-            'original_invoice_id': self.original_invoice_id,
-            'original_invoice_number': self.original_invoice_number,
-            'customer_id': self.customer_id,
-            'customer_name': self.customer_name,
-            'customer_phone': self.customer_phone,
-            'user_id': self.user_id,
-            'authorized_by': self.authorized_by,
-            'authorizer_name': self.authorizer_name,
-            'return_type': self.return_type,
-            'refund_method': self.refund_method,
-            'items': [item.to_dict() for item in self.items],
-            'refund': self.refund.to_dict() if self.refund else None,
-            'subtotal': self.subtotal,
-            'vat_amount': self.vat_amount,
-            'total_refund': self.total_refund,
-            'reason': self.reason,
-            'status': self.status,
-            'external_id': self.external_id,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            "id": self.id,
+            "return_number": self.return_number,
+            "original_sale_id": self.original_sale_id,
+            "original_invoice_id": self.original_invoice_id,
+            "original_invoice_number": self.original_invoice_number,
+            "customer_id": self.customer_id,
+            "customer_name": self.customer_name,
+            "customer_phone": self.customer_phone,
+            "user_id": self.user_id,
+            "authorized_by": self.authorized_by,
+            "authorizer_name": self.authorizer_name,
+            "return_type": self.return_type,
+            "refund_method": self.refund_method,
+            "items": [item.to_dict() for item in self.items],
+            "refund": self.refund.to_dict() if self.refund else None,
+            "subtotal": self.subtotal,
+            "vat_amount": self.vat_amount,
+            "total_refund": self.total_refund,
+            "reason": self.reason,
+            "status": self.status,
+            "external_id": self.external_id,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at else None
+            ),
         }

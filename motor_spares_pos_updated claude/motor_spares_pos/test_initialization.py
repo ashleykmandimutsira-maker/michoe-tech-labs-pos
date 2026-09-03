@@ -1,4 +1,5 @@
 """Regression tests for idempotent startup/sample catalog initialization."""
+
 from __future__ import annotations
 
 import logging
@@ -12,13 +13,19 @@ import main
 
 def _counts(service: ProductService) -> tuple[int, int]:
     db = service.db
-    categories = db.execute_query("SELECT COUNT(*) count FROM categories")[0]["count"]
-    products = db.execute_query("SELECT COUNT(*) count FROM products")[0]["count"]
+    categories = db.execute_query("SELECT COUNT(*) count FROM categories")[0][
+        "count"
+    ]
+    products = db.execute_query("SELECT COUNT(*) count FROM products")[0][
+        "count"
+    ]
     return categories, products
 
 
 def run_all_tests() -> bool:
-    test_db = Path(__file__).resolve().parent / "data" / "initialization_test.db"
+    test_db = (
+        Path(__file__).resolve().parent / "data" / "initialization_test.db"
+    )
     test_db.unlink(missing_ok=True)
     try:
         configure_database(str(test_db))
@@ -37,14 +44,23 @@ def run_all_tests() -> bool:
         print("PASS initialization is idempotent")
 
         # A real user duplicate gets a clear validation error, not seed logic.
-        service.create_product(Product(part_no="USER-NEW-001", description="User product"))
+        service.create_product(
+            Product(part_no="USER-NEW-001", description="User product")
+        )
         try:
-            service.create_product(Product(part_no="USER-NEW-001", description="Duplicate user product"))
+            service.create_product(
+                Product(
+                    part_no="USER-NEW-001",
+                    description="Duplicate user product",
+                )
+            )
         except ValueError as exc:
             assert "already exists" in str(exc)
             print("PASS duplicate user product validation")
         else:
-            raise AssertionError("Duplicate product creation should fail validation")
+            raise AssertionError(
+                "Duplicate product creation should fail validation"
+            )
         return True
     finally:
         test_db.unlink(missing_ok=True)

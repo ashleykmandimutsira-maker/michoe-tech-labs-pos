@@ -497,6 +497,7 @@ BEGIN
 END;
 """
 
+
 def get_schema():
     """Returns the complete database schema SQL."""
     return SCHEMA_SQL
