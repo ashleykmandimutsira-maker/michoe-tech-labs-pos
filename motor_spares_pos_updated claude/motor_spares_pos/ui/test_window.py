@@ -4076,12 +4076,21 @@ class SettingsPage(QWidget):
 
     def save(self):
         try:
+            # Validate VAT/tax input
+            tax_text = self.tax.text().strip() or "15"
+            try:
+                tax_value = float(tax_text)
+            except ValueError:
+                raise ValueError("VAT rate must be a numeric value (e.g. 15 or 15.0)")
+            if tax_value < 0 or tax_value > 100:
+                raise ValueError("VAT rate must be between 0 and 100")
+
             values = [
                 ("company_name", self.shop.text().strip()),
                 ("tagline", self.tagline.text().strip()),
                 ("company_phone", self.phone.text().strip()),
                 ("currency", self.currency.currentText()),
-                ("tax_rate", self.tax.text().strip() or "15"),
+                ("tax_rate", str(tax_value)),
                 ("sync_mode", self.sync_mode.currentText()),
                 ("sync_endpoint", self.endpoint.text().strip()),
                 ("printer_name", self.printer.text().strip()),
@@ -4093,7 +4102,7 @@ class SettingsPage(QWidget):
                     "INSERT INTO settings(key,value,data_type) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
                     (key, value, "string"),
                 )
-            emit_change("SETTINGS", {"currency": self.currency.currentText()})
+            emit_change("SETTINGS", {"currency": self.currency.currentText(), "tax_rate": tax_value})
             QMessageBox.information(
                 self,
                 "Settings saved",
