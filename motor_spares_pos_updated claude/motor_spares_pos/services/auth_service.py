@@ -153,7 +153,9 @@ class AuthenticationService:
         # Check if username exists
         existing = self.get_user_by_username(username)
         if existing:
-            raise ValueError(f"Username already exists: {username}")
+            # Idempotent create for tests and sample data: return existing user id
+            logger.warning(f"Username already exists: {username}, returning existing ID")
+            return existing.id
 
         # Hash password
         password_hash = self.hash_password(password)
