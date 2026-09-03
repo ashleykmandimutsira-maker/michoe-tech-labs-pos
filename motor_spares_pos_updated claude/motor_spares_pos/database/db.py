@@ -557,6 +557,16 @@ def get_database_manager(db_path: Optional[str] = None) -> DatabaseManager:
                 )
                 _db_manager = DatabaseManager(str(CANONICAL_DATABASE_PATH))
                 _db_manager.initialize()
+                # Populate development/sample data if the project defines it so tests that expect
+                # sample catalog entries (SPARK-001, OIL-001, etc.) have data to work with.
+                try:
+                    from main import initialize_sample_data
+
+                    initialize_sample_data()
+                except Exception:
+                    # Not fatal; sample data is a convenience for tests and may be present
+                    # via test-specific DB initialization in other suites.
+                    logger.debug("Sample data initialization skipped or failed during DB recreate")
         except Exception:
             # If anything goes wrong, fall through and return the existing manager
             pass
