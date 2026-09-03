@@ -375,21 +375,6 @@ class DatabaseManager:
             "integrity_check": integrity,
             "table_counts": counts,
         }
-        cursor.execute(
-            "UPDATE sales SET cashier_name = (SELECT full_name FROM users WHERE users.id = sales.user_id) "
-            "WHERE (cashier_name IS NULL OR cashier_name = '') AND user_id IS NOT NULL"
-        )
-
-        # Correct the original placeholder hash only; do not overwrite an
-        # administrator password that has already been changed by the owner.
-        cursor.execute(
-            "UPDATE users SET password_hash = ? WHERE username = ? AND password_hash = ?",
-            (
-                "$2b$12$7o7j6bc/GMP/2Lriz27zxO0d5urBoMcMwL55tjX3baz3xsI5a0v8i",
-                "admin",
-                "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5YmMxSUWzFN2m",
-            ),
-        )
 
     def backup(self, backup_path: str) -> None:
         """
