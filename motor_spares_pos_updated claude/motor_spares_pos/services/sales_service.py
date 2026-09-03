@@ -925,16 +925,19 @@ class SalesService:
             raise ValueError("Draft invoices must be deleted, not voided")
         # Mark the sale voided and reverse stock (void_sale handles audit for sale and stock reversal).
         self.void_sale(invoice["sale_id"], user_id, reason or "Invoice voided")
-        # After reversing stock and recording sale-level audit, remove the invoice and payments so the
-        # invoice no longer appears in invoice registers or financial reports. Preserve audit_logs.
+        # After reversing stock and recording sale-level audit, mark the invoice VOIDED and update payments
+        # so the invoice no longer appears in active invoice registers or financial reports. Preserve audit_logs.
         try:
             with self.db.transaction() as conn:
-                # Delete payments tied to this sale
-                conn.execute("DELETE FROM payments WHERE sale_id=?", (invoice["sale_id"],))
-                # Delete the invoice record
-                conn.execute("DELETE FROM invoices WHERE id=?", (invoice["id"],))
+                # Mark invoice as voided (logical delete) so history remains for audit but it's excluded from reports
+                conn.execute("UPDATE invoices SET status='VOIDED', updated_at = CURRENT_TIMESTAMP WHERE id=?", (invoice["id"],))
+                # Mark payments as refunded/cancelled so they don't count as active receipts
+                conn.execute("UPDATE payments SET status='REFUNDED' WHERE sale_id=?", (invoice["sale_id"],))
                 # Remove any pending sync queue entries for this sale/invoice to avoid duplicate/ghost syncs
-                conn.execute("DELETE FROM sync_queue WHERE (entity_type='SALE' AND entity_id=?) OR (entity_type='INVOICE' AND entity_id=?)", (invoice["sale_id"], invoice["id"]))
+                conn.execute(
+                    "DELETE FROM sync_queue WHERE (entity_type='SALE' AND entity_id=?) OR (entity_type='INVOICE' AND entity_id=?)",
+                    (invoice["sale_id"], invoice["id"]),
+                )
             AuditService().log_action(
                 "INVOICE_VOIDED",
                 "INVOICE",
@@ -946,12 +949,12 @@ class SalesService:
             # Notify UI and analytics that invoice/sale data changed
             try:
                 from core.events import emit_change as _emit_change
-                _emit_change("INVOICE", {"invoice_number": invoice_number, "operation": "DELETE"})
+                _emit_change("INVOICE", {"invoice_number": invoice_number, "operation": "VOID"})
             except Exception:
                 pass
             return True
         except Exception as e:
-            logger.exception("Failed to remove invoice after voiding: %s", e)
+            logger.exception("Failed to mark invoice as voided: %s", e)
             raise
 
     def delete_draft_invoice(self, invoice_number: str, user_id: int) -> bool:
