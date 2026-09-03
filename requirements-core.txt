@@ -1,0 +1,10 @@
+# Core requirements for Motor Spares POS - PHASE 1
+# These are required for database, services, and backend functionality
+# PySide6 and GUI dependencies are in requirements.txt
+
+pandas>=2.2.0
+openpyxl>=3.1.0
+pyserial>=3.5
+requests>=2.31.0
+bcrypt>=4.0
+python-dateutil>=2.8.2

@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Generated reports/files
+*.pdf
+*.xlsx
+
+# Logs
+*.log
+
+# Build/package output
+build/
+dist/
+*.egg-info/
+
+# PyInstaller
+*.spec
+
+# Environment/secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Archives/backups
+*.zip
+
+# OS
+Thumbs.db
+.DS_Store
