@@ -3,7 +3,7 @@ User, role, and permission models for Motor Spares POS.
 PHASE 2: Authentication and authorization.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List
 
@@ -33,13 +33,9 @@ class Role:
     id: Optional[int] = None
     name: str = ""
     description: str = ""
-    permissions: List[Permission] = None
+    permissions: List[Permission] = field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    def __post_init__(self):
-        if self.permissions is None:
-            self.permissions = []
 
     def to_dict(self) -> dict:
         return {
@@ -80,15 +76,11 @@ class User:
     phone: Optional[str] = None
     role_id: Optional[int] = None
     role: Optional[Role] = None
-    permissions: List[Permission] = None
+    permissions: List[Permission] = field(default_factory=list)
     is_active: bool = True
     last_login: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    def __post_init__(self):
-        if self.permissions is None:
-            self.permissions = []
 
     def has_permission(self, permission_code: str) -> bool:
         """Check if user has a specific permission."""
@@ -104,19 +96,19 @@ class User:
 
     def is_admin(self) -> bool:
         """Check if user is an administrator."""
-        return self.role and self.role.name == 'ADMIN'
+        return self.role is not None and self.role.name == 'ADMIN'
 
     def is_manager(self) -> bool:
         """Check if user is a manager."""
-        return self.role and self.role.name == 'MANAGER'
+        return self.role is not None and self.role.name == 'MANAGER'
 
     def is_cashier(self) -> bool:
         """Check if user is a cashier."""
-        return self.role and self.role.name == 'CASHIER'
+        return self.role is not None and self.role.name == 'CASHIER'
 
     def is_stock_clerk(self) -> bool:
         """Check if user is a stock clerk."""
-        return self.role and self.role.name == 'STOCK_CLERK'
+        return self.role is not None and self.role.name == 'STOCK_CLERK'
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization (excluding password hash)."""

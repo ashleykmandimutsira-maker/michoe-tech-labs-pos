@@ -320,7 +320,10 @@ class SalesService:
                 "INSERT INTO held_sales(hold_number,customer_data,cart_data,user_id) VALUES(?,?,?,?)",
                 (hold_number, json.dumps(customer or {}), json.dumps(cart), user_id),
             ).lastrowid
-        return self.get_held_sale(hold_id)
+        held = self.get_held_sale(hold_id)
+        if held is None:
+            raise RuntimeError('Failed to retrieve held sale after creation')
+        return held
 
     def list_held_sales(self) -> list[dict]:
         return [dict(row) for row in self.db.execute_query(
@@ -361,6 +364,8 @@ class SalesService:
                 [(quote_id, item['product_id'], item['part_no'], item['description'], item.get('brand'), item.get('vehicle_make'), item.get('vehicle_model'), int(item['quantity']), float(item['unit_price']), float(item['quantity']) * float(item['unit_price'])) for item in items],
             )
         quote = self.get_quotation(quote_id)
+        if quote is None:
+            raise RuntimeError('Failed to retrieve newly created quotation')
         AuditService().log_action('QUOTATION_CREATED', 'QUOTATION', quote_id, user_id)
         self.sync.enqueue('QUOTATION', quote_id, 'CREATE', json.dumps(quote))
         self.sync.request_background_sync()
@@ -373,7 +378,7 @@ class SalesService:
             clauses.append("(quote_number LIKE ? OR customer_data LIKE ?)")
             params.extend([f"%{search_term.strip()}%", f"%{search_term.strip()}%"]) 
         query = "SELECT id FROM quotations" + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY created_at DESC, id DESC"
-        return [self.get_quotation(row['id']) for row in self.db.execute_query(query, tuple(params))]
+        return [q for q in (self.get_quotation(row['id']) for row in self.db.execute_query(query, tuple(params))) if q is not None]
 
     def get_quotation(self, quote_id: int) -> Optional[dict]:
         rows = self.db.execute_query("SELECT * FROM quotations WHERE id=?", (quote_id,))
@@ -410,6 +415,8 @@ class SalesService:
         if self.db.execute_update("UPDATE quotations SET status=?, issued_at=CASE WHEN ?='ISSUED' THEN CURRENT_TIMESTAMP ELSE issued_at END, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status NOT IN ('CONVERTED','CANCELLED')", (status, status, quote_id)) != 1:
             raise ValueError('Quotation is unavailable for this status change')
         quote = self.get_quotation(quote_id)
+        if quote is None:
+            raise RuntimeError('Quotation not found after status change')
         AuditService().log_action(f'QUOTATION_{status}', 'QUOTATION', quote_id, user_id)
         self.sync.enqueue('QUOTATION', quote_id, 'UPDATE', json.dumps(quote))
         self.sync.request_background_sync()

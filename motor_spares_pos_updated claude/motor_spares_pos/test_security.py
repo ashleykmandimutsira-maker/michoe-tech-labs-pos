@@ -8,7 +8,7 @@ from services.auth_service import AuthenticationService
 from services.product_service import ProductService
 from services.sales_service import SalesService
 
-TEST_DATABASES = []
+TEST_DATABASES: list[Path] = []
 
 
 def _setup():

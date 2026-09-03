@@ -143,7 +143,7 @@ class DatabaseManager:
             raise
 
     def execute_query(
-        self, query: str, params: tuple = None
+        self, query: str, params: Optional[tuple] = None
     ) -> list[sqlite3.Row]:
         """
         Execute a SELECT query and return results.
@@ -165,7 +165,7 @@ class DatabaseManager:
             return cursor.fetchall()
 
     def execute_update(
-        self, query: str, params: tuple = None
+        self, query: str, params: Optional[tuple] = None
     ) -> int:
         """
         Execute an INSERT/UPDATE/DELETE query.

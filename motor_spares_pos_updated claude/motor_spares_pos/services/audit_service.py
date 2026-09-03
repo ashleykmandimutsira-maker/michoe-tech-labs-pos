@@ -21,7 +21,7 @@ class AuditService:
         self.db = get_database_manager()
 
     def log_action(self, action: str, entity_type: Optional[str] = None, 
-                  entity_id: Optional[int] = None, requesting_user_id: int = 0, 
+                  entity_id: Optional[int] = None, requesting_user_id: Optional[int] = None, 
                   reason: Optional[str] = None, details: Optional[str] = None,
                   approving_user_id: Optional[int] = None) -> int:
         """
@@ -45,7 +45,8 @@ class AuditService:
         """
         
         try:
-            params = (action, entity_type, entity_id, requesting_user_id, approving_user_id, reason, details)
+            # Ensure numeric fields are valid for storage (use None when unknown)
+            params = (action, entity_type, entity_id, requesting_user_id or None, approving_user_id, reason, details)
             self.db.execute_update(query, params)
             log_id = self.db.get_last_insert_id()
             
@@ -58,7 +59,7 @@ class AuditService:
             logger.error(f"Failed to log audit: {e}")
             raise
 
-    def log_authorization(self, requesting_user_id: int, approving_user_id: int,
+    def log_authorization(self, requesting_user_id: Optional[int], approving_user_id: Optional[int],
                          action: str, entity_id: int, entity_type: Optional[str] = None,
                          reason: Optional[str] = None) -> int:
         """

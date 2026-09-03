@@ -136,6 +136,8 @@ class ReturnsService:
         )
         if not invoice_rows:
             raise ValueError(f"Invoice not found: {invoice_number}")
+        if original_sale.id is None:
+            raise ValueError(f"Original sale has no ID: {invoice_number}")
         return_obj = Return(
             return_number=self._generate_return_number(),
             original_sale_id=original_sale.id,

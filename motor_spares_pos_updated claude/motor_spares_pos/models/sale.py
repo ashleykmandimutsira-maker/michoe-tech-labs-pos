@@ -116,6 +116,7 @@ class Sale:
     notes: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    _quotation_id: Optional[int] = None
 
     def add_item(self, item: SaleItem):
         """Add item to sale and recalculate totals."""

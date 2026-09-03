@@ -7,8 +7,11 @@ import logging
 from typing import Optional, List
 from datetime import datetime
 
+from types import ModuleType
+bcrypt: Optional[ModuleType] = None
 try:
-    import bcrypt
+    import bcrypt as _bcrypt
+    bcrypt = _bcrypt
 except ImportError:
     bcrypt = None
 
@@ -353,7 +356,7 @@ class AuthenticationService:
         logger.info(f"User activated: ID {user_id}")
         return True
 
-    def get_user_permissions(self, user_id: int) -> List[Permission]:
+    def get_user_permissions(self, user_id: Optional[int]) -> List[Permission]:
         """Get all permissions for a user."""
         query = """
             SELECT p.* FROM permissions p
@@ -362,6 +365,8 @@ class AuthenticationService:
             ORDER BY p.category, p.code
         """
         
+        if user_id is None:
+            return []
         results = self.db.execute_query(query, (user_id,))
         return [self._row_to_permission(row) for row in results]
 
@@ -424,7 +429,7 @@ class AuthenticationService:
             (target_user_id,),
         )
         current = {row['code']: row['id'] for row in current_rows}
-        changed = {'granted': [], 'revoked': []}
+        changed: dict[str, list[str]] = {'granted': [], 'revoked': []}
 
         for code in sorted(requested - set(current)):
             self.grant_permission(target_user_id, known[code], admin_user_id)
@@ -476,8 +481,10 @@ class AuthenticationService:
             logger.error(f"Failed to revoke permission: {e}")
             return False
 
-    def update_last_login(self, user_id: int):
+    def update_last_login(self, user_id: Optional[int]):
         """Update last login timestamp."""
+        if user_id is None:
+            return
         query = "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?"
         try:
             self.db.execute_update(query, (user_id,))

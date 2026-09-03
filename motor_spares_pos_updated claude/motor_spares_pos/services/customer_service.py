@@ -36,6 +36,8 @@ class CustomerService:
             customer_id = conn.execute("INSERT INTO customers(name,company,phone,email,address,city,country,id_number,active) VALUES(?,?,?,?,?,?,?,?,1)", (customer.name.strip(), customer.company, customer.phone, customer.email, customer.address, customer.city, customer.country, customer.id_number)).lastrowid
             conn.execute("UPDATE customers SET customer_code=? WHERE id=?", (f"CUS-{customer_id:06d}", customer_id))
         saved = self.get_customer(customer_id)
+        if saved is None:
+            raise RuntimeError('Failed to retrieve newly created customer')
         AuditService().log_action('CUSTOMER_CREATED', 'CUSTOMER', customer_id, user_id)
         self._sync('CREATE', saved)
         return saved
@@ -45,7 +47,12 @@ class CustomerService:
         if not customer.id or not self.get_customer(customer.id): raise ValueError('Customer was not found')
         self._validate_customer(customer); self._ensure_unique(customer, customer.id)
         self.db.execute_update("UPDATE customers SET name=?,company=?,phone=?,email=?,address=?,city=?,country=?,id_number=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (customer.name.strip(), customer.company, customer.phone, customer.email, customer.address, customer.city, customer.country, customer.id_number, customer.id))
-        saved = self.get_customer(customer.id); AuditService().log_action('CUSTOMER_EDITED', 'CUSTOMER', customer.id, user_id); self._sync('UPDATE', saved); return saved
+        saved = self.get_customer(customer.id)
+        if saved is None:
+            raise RuntimeError('Failed to retrieve updated customer')
+        AuditService().log_action('CUSTOMER_EDITED', 'CUSTOMER', customer.id, user_id)
+        self._sync('UPDATE', saved)
+        return saved
 
     def archive_customer(self, customer_id: int, user_id: Optional[int] = None) -> None:
         self._require(user_id, 'customers.archive')
@@ -65,7 +72,12 @@ class CustomerService:
         if not vehicle.registration_number.strip(): raise ValueError('Registration number is required')
         if self.db.execute_query("SELECT id FROM vehicles WHERE registration_number=?", (vehicle.registration_number.strip(),)): raise ValueError('A vehicle with this registration already exists')
         self.db.execute_update("INSERT INTO vehicles(customer_id,registration_number,make,model,year,engine,vin,color,notes,active) VALUES(?,?,?,?,?,?,?,?,?,1)", (vehicle.customer_id, vehicle.registration_number.strip().upper(), vehicle.make, vehicle.model, vehicle.year, vehicle.engine, vehicle.vin, vehicle.color, vehicle.notes))
-        saved = self.get_vehicle(self.db.get_last_insert_id()); AuditService().log_action('VEHICLE_CREATED', 'VEHICLE', saved.id, user_id); self._sync('CREATE', saved); return saved
+        saved = self.get_vehicle(self.db.get_last_insert_id())
+        if saved is None:
+            raise RuntimeError('Failed to retrieve newly created vehicle')
+        AuditService().log_action('VEHICLE_CREATED', 'VEHICLE', saved.id, user_id)
+        self._sync('CREATE', saved)
+        return saved
 
     def get_vehicle(self, vehicle_id: int) -> Optional[Vehicle]:
         rows = self.db.execute_query('SELECT * FROM vehicles WHERE id=?', (vehicle_id,)); return self._vehicle(rows[0]) if rows else None
@@ -77,7 +89,12 @@ class CustomerService:
         duplicate = self.db.execute_query('SELECT id FROM vehicles WHERE registration_number=? AND id<>?', (vehicle.registration_number.strip().upper(), vehicle.id))
         if duplicate: raise ValueError('A vehicle with this registration already exists')
         self.db.execute_update('UPDATE vehicles SET registration_number=?,make=?,model=?,year=?,engine=?,vin=?,color=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?', (vehicle.registration_number.strip().upper(), vehicle.make, vehicle.model, vehicle.year, vehicle.engine, vehicle.vin, vehicle.color, vehicle.notes, vehicle.id))
-        saved=self.get_vehicle(vehicle.id); AuditService().log_action('VEHICLE_EDITED','VEHICLE',vehicle.id,user_id); self._sync('UPDATE',saved); return saved
+        saved = self.get_vehicle(vehicle.id)
+        if saved is None:
+            raise RuntimeError('Failed to retrieve updated vehicle')
+        AuditService().log_action('VEHICLE_EDITED','VEHICLE',vehicle.id,user_id)
+        self._sync('UPDATE',saved)
+        return saved
 
     def list_vehicles(self, customer_id: int, archived: bool = False) -> list[Vehicle]:
         return [self._vehicle(row) for row in self.db.execute_query('SELECT * FROM vehicles WHERE customer_id=? AND active=? ORDER BY registration_number', (customer_id, 0 if archived else 1))]

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from typing import Optional
 from database.db import get_database_manager
 
 
@@ -27,6 +28,6 @@ class CurrencyService:
         except (OSError, ValueError, TypeError):
             return "ZWL"
 
-    def format_money(self, value: float, currency: str = None) -> str:
+    def format_money(self, value: float, currency: Optional[str] = None) -> str:
         code = (currency or self.current_code()).upper()
         return f"{self.SYMBOLS.get(code, code)} {float(value):,.2f}"
