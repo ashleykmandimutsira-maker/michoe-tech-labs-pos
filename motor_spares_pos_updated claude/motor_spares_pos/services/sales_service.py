@@ -930,7 +930,7 @@ class SalesService:
         try:
             with self.db.transaction() as conn:
                 # Mark invoice as voided (logical delete) so history remains for audit but it's excluded from reports
-                conn.execute("UPDATE invoices SET status='VOIDED', updated_at = CURRENT_TIMESTAMP WHERE id=?", (invoice["id"],))
+                conn.execute("UPDATE invoices SET status='VOIDED' WHERE id=?", (invoice["id"],))
                 # Mark payments as refunded/cancelled so they don't count as active receipts
                 conn.execute("UPDATE payments SET status='REFUNDED' WHERE sale_id=?", (invoice["sale_id"],))
                 # Remove any pending sync queue entries for this sale/invoice to avoid duplicate/ghost syncs
