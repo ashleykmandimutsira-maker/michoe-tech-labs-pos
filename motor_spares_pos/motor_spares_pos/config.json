@@ -1,0 +1,21 @@
+{
+  "company_name": "Motor Spares Shop",
+  "address": "123 Main Street, Zimbabwe",
+  "phone": "+263-123-456-789",
+  "email": "info@motorspares.co.zw",
+  "tax_id": "TAX123456",
+  "shop_id": "SHOP001",
+  "shop_name": "Harare Branch",
+  "default_currency": "ZWL",
+  "usd_zig_exchange_rate": 1000.0,
+  "printer_type": "thermal",
+  "printer_name": "EPSON TM-T20",
+  "fiscal_device_port": "COM1",
+  "server_url": "http://127.0.0.1:8765",
+  "sync_interval": 10,
+  "allow_negative_inventory": false,
+  "app_version": "1.0.0",
+  "database_path": "data/pos.db",
+  "sync_timeout": 5,
+  "sync_endpoint": ""
+}
