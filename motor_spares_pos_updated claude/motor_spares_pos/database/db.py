@@ -536,11 +536,30 @@ def get_database_manager(db_path: Optional[str] = None) -> DatabaseManager:
         DatabaseManager instance
     """
     global _db_manager
+    # If a global manager exists but its path is no longer accessible (for example
+    # a test created a temp DB and the temp directory was removed), recreate the
+    # manager using the canonical project database so callers always have a
+    # usable database. This avoids stale manager instances pointing at removed
+    # temporary files during test runs.
     if _db_manager is None:
         _db_manager = DatabaseManager(
             str(Path(db_path) if db_path else CANONICAL_DATABASE_PATH)
         )
         _db_manager.initialize()
+    else:
+        # If the current manager's DB path is missing or its directory was removed,
+        # re-create it pointing at the canonical DB unless an explicit db_path was requested.
+        try:
+            if db_path is None and not os.path.exists(_db_manager.db_path):
+                logger.warning(
+                    "Global DB manager path missing (%s), recreating with canonical DB",
+                    _db_manager.db_path,
+                )
+                _db_manager = DatabaseManager(str(CANONICAL_DATABASE_PATH))
+                _db_manager.initialize()
+        except Exception:
+            # If anything goes wrong, fall through and return the existing manager
+            pass
     return _db_manager
 
 
