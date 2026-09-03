@@ -2,9 +2,17 @@ import subprocess
 import sys
 import os
 
-os.chdir(r"c:\Users\HomePC\Documents\Online Motor Spare Pos System\motor_spares_pos_updated claude\motor_spares_pos")
+os.chdir(
+    r"c:\Users\HomePC\Documents\Online Motor Spare Pos System\motor_spares_pos_updated claude\motor_spares_pos"
+)
 
-tests = sys.argv[1:] or ["test_phase1.py", "test_phase2.py", "test_initialization.py", "test_cart.py", "test_security.py"]
+tests = sys.argv[1:] or [
+    "test_phase1.py",
+    "test_phase2.py",
+    "test_initialization.py",
+    "test_cart.py",
+    "test_security.py",
+]
 results = []
 for t in tests:
     r = subprocess.run([sys.executable, t], capture_output=True, text=True)
@@ -12,7 +20,9 @@ for t in tests:
     err_tail = (r.stderr or "").strip().splitlines()[-3:]
     results.append((t, r.returncode))
     print("=" * 70)
-    print(f"TEST {t}  EXIT={r.returncode} {'PASS' if r.returncode==0 else 'FAIL'}")
+    print(
+        f"TEST {t}  EXIT={r.returncode} {'PASS' if r.returncode==0 else 'FAIL'}"
+    )
     print("-" * 70)
     for line in tail:
         print("OUT:", line)

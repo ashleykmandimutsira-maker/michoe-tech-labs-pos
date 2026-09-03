@@ -34,8 +34,7 @@ def get_db():
 
 def init_db():
     with get_db() as conn:
-        conn.executescript(
-            """
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS sync_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 client_key TEXT NOT NULL UNIQUE,
@@ -69,8 +68,7 @@ def init_db():
                 updated_at TEXT NOT NULL,
                 source_shop TEXT NOT NULL
             );
-            """
-        )
+            """)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -112,7 +110,9 @@ class Handler(BaseHTTPRequestHandler):
                 rows.append(payload)
             with get_db() as conn:
                 customer_result = conn.execute(
-                    "SELECT payload, updated_at FROM customers" + (" WHERE updated_at > ?" if since else "") + " ORDER BY updated_at ASC",
+                    "SELECT payload, updated_at FROM customers"
+                    + (" WHERE updated_at > ?" if since else "")
+                    + " ORDER BY updated_at ASC",
                     (since,) if since else (),
                 ).fetchall()
             customer_rows = []
@@ -120,10 +120,14 @@ class Handler(BaseHTTPRequestHandler):
                 payload = json.loads(row["payload"])
                 payload["updated_at"] = row["updated_at"]
                 customer_rows.append(payload)
-            
-            
+
             with get_db() as conn:
-                vehicle_result = conn.execute("SELECT payload, updated_at FROM vehicles" + (" WHERE updated_at > ?" if since else "") + " ORDER BY updated_at ASC", (since,) if since else ()).fetchall()
+                vehicle_result = conn.execute(
+                    "SELECT payload, updated_at FROM vehicles"
+                    + (" WHERE updated_at > ?" if since else "")
+                    + " ORDER BY updated_at ASC",
+                    (since,) if since else (),
+                ).fetchall()
             vehicle_rows = []
             for row in vehicle_result:
                 payload = json.loads(row["payload"])
@@ -131,8 +135,9 @@ class Handler(BaseHTTPRequestHandler):
                 vehicle_rows.append(payload)
             with get_db() as conn:
                 deleted_rows = conn.execute(
-                    "SELECT part_no, deleted_at FROM product_tombstones" +
-                    (" WHERE deleted_at > ?" if since else "") + " ORDER BY deleted_at ASC",
+                    "SELECT part_no, deleted_at FROM product_tombstones"
+                    + (" WHERE deleted_at > ?" if since else "")
+                    + " ORDER BY deleted_at ASC",
                     (since,) if since else (),
                 ).fetchall()
             deleted_products = [dict(row) for row in deleted_rows]
@@ -179,13 +184,27 @@ class Handler(BaseHTTPRequestHandler):
                             payload=excluded.payload,
                             updated_at=excluded.updated_at
                         """,
-                        (client_key, shop_id, entity_type, entity_id, operation, payload_text, now),
+                        (
+                            client_key,
+                            shop_id,
+                            entity_type,
+                            entity_id,
+                            operation,
+                            payload_text,
+                            now,
+                        ),
                     )
                     if entity_type == "PRODUCT" and operation == "DELETE":
                         part_no = str(payload.get("part_no") or "").strip()
                         if part_no:
-                            conn.execute("DELETE FROM products WHERE part_no=?", (part_no,))
-                            conn.execute("INSERT OR REPLACE INTO product_tombstones(part_no, deleted_at, source_shop) VALUES(?,?,?)", (part_no, now, shop_id))
+                            conn.execute(
+                                "DELETE FROM products WHERE part_no=?",
+                                (part_no,),
+                            )
+                            conn.execute(
+                                "INSERT OR REPLACE INTO product_tombstones(part_no, deleted_at, source_shop) VALUES(?,?,?)",
+                                (part_no, now, shop_id),
+                            )
                     elif entity_type == "PRODUCT":
                         part_no = str(payload.get("part_no") or "").strip()
                         if part_no:
@@ -210,7 +229,12 @@ class Handler(BaseHTTPRequestHandler):
                             "INSERT INTO vehicles(id,payload,updated_at,source_shop) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at, source_shop=excluded.source_shop",
                             (entity_id, payload_text, now, shop_id),
                         )
-                    accepted.append({"client_key": client_key, "external_id": f"SERVER-{entity_type}-{entity_id}"})
+                    accepted.append(
+                        {
+                            "client_key": client_key,
+                            "external_id": f"SERVER-{entity_type}-{entity_id}",
+                        }
+                    )
             self._json(200, {"accepted": accepted})
         except Exception as exc:
             self._json(400, {"error": str(exc)})

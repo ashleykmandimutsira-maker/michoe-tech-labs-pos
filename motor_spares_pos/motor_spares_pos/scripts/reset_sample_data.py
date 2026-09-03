@@ -14,30 +14,58 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ROOT.parents[1]
-LOCAL_DB = (Path.cwd() / "data" / "pos.db" if (Path.cwd() / "data" / "pos.db").exists()
-            else WORKSPACE_ROOT / "data" / "pos.db" if (WORKSPACE_ROOT / "data" / "pos.db").exists()
-            else ROOT / "data" / "pos.db")
+LOCAL_DB = (
+    Path.cwd() / "data" / "pos.db"
+    if (Path.cwd() / "data" / "pos.db").exists()
+    else (
+        WORKSPACE_ROOT / "data" / "pos.db"
+        if (WORKSPACE_ROOT / "data" / "pos.db").exists()
+        else ROOT / "data" / "pos.db"
+    )
+)
 SYNC_DB = ROOT / "server_data" / "sync_server.db"
 CONFIRMATION = "RESET SAMPLE DATA"
 
 LOCAL_CLEAR_ORDER = [
-    "return_items", "refunds", "sale_items", "payments", "invoices", "returns",
-    "stock_movements", "sales", "sync_queue", "sync_log", "audit_logs",
-    "products", "customers", "categories", "vehicle_models",
+    "return_items",
+    "refunds",
+    "sale_items",
+    "payments",
+    "invoices",
+    "returns",
+    "stock_movements",
+    "sales",
+    "sync_queue",
+    "sync_log",
+    "audit_logs",
+    "products",
+    "customers",
+    "categories",
+    "vehicle_models",
     "product_tombstones",
 ]
 SYNC_CLEAR_ORDER = ["sync_records", "products", "customers"]
-PRESERVED_LOCAL = ["users", "roles", "permissions", "user_permissions", "settings"]
+PRESERVED_LOCAL = [
+    "users",
+    "roles",
+    "permissions",
+    "user_permissions",
+    "settings",
+]
 
 
 def backup_database(path: Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"Database does not exist: {path}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = path.with_name(f"{path.stem}_before_sample_reset_{stamp}{path.suffix}")
+    backup = path.with_name(
+        f"{path.stem}_before_sample_reset_{stamp}{path.suffix}"
+    )
     counter = 1
     while backup.exists():
-        backup = path.with_name(f"{path.stem}_before_sample_reset_{stamp}_{counter}{path.suffix}")
+        backup = path.with_name(
+            f"{path.stem}_before_sample_reset_{stamp}_{counter}{path.suffix}"
+        )
         counter += 1
     source = sqlite3.connect(path)
     target = sqlite3.connect(backup)
@@ -52,18 +80,30 @@ def backup_database(path: Path) -> Path:
 def schema_report(path: Path) -> dict:
     conn = sqlite3.connect(path)
     try:
-        tables = [row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )]
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
         foreign_keys = {
-            table: [tuple(row) for row in conn.execute(f'PRAGMA foreign_key_list("{table}")')]
+            table: [
+                tuple(row)
+                for row in conn.execute(f'PRAGMA foreign_key_list("{table}")')
+            ]
             for table in tables
         }
         counts = {
-            table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[
+                0
+            ]
             for table in tables
         }
-        return {"tables": tables, "foreign_keys": foreign_keys, "counts": counts}
+        return {
+            "tables": tables,
+            "foreign_keys": foreign_keys,
+            "counts": counts,
+        }
     finally:
         conn.close()
 
@@ -85,7 +125,9 @@ def clear_local(path: Path) -> dict:
         for table in LOCAL_CLEAR_ORDER:
             if table not in tables:
                 continue
-            count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            count = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[
+                0
+            ]
             conn.execute(f'DELETE FROM "{table}"')
             deleted[table] = count
         if "settings" in tables:
@@ -93,7 +135,10 @@ def clear_local(path: Path) -> dict:
                 "DELETE FROM settings WHERE key='sync_last_pulled_at'"
             ).rowcount
         placeholders = ",".join("?" for _ in LOCAL_CLEAR_ORDER)
-        conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", LOCAL_CLEAR_ORDER)
+        conn.execute(
+            f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+            LOCAL_CLEAR_ORDER,
+        )
         if trigger_row:
             conn.execute(trigger_row[0])
         conn.commit()
@@ -116,9 +161,14 @@ def clear_sync_server(path: Path) -> dict:
         for table in SYNC_CLEAR_ORDER:
             if table not in tables:
                 continue
-            deleted[table] = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            deleted[table] = conn.execute(
+                f'SELECT COUNT(*) FROM "{table}"'
+            ).fetchone()[0]
             conn.execute(f'DELETE FROM "{table}"')
-        conn.execute("DELETE FROM sqlite_sequence WHERE name IN (?,?,?)", SYNC_CLEAR_ORDER)
+        conn.execute(
+            "DELETE FROM sqlite_sequence WHERE name IN (?,?,?)",
+            SYNC_CLEAR_ORDER,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -130,34 +180,59 @@ def clear_sync_server(path: Path) -> dict:
 
 def verify_local(path: Path) -> None:
     report = schema_report(path)
-    missing = [table for table in PRESERVED_LOCAL + LOCAL_CLEAR_ORDER if table not in report["tables"]]
+    missing = [
+        table
+        for table in PRESERVED_LOCAL + LOCAL_CLEAR_ORDER
+        if table not in report["tables"]
+    ]
     if missing:
-        raise RuntimeError("Schema changed unexpectedly; missing tables: " + ", ".join(missing))
-    nonzero = {table: report["counts"][table] for table in LOCAL_CLEAR_ORDER if report["counts"].get(table, 0)}
+        raise RuntimeError(
+            "Schema changed unexpectedly; missing tables: "
+            + ", ".join(missing)
+        )
+    nonzero = {
+        table: report["counts"][table]
+        for table in LOCAL_CLEAR_ORDER
+        if report["counts"].get(table, 0)
+    }
     if nonzero:
-        raise RuntimeError(f"Reset verification failed; non-zero tables: {nonzero}")
+        raise RuntimeError(
+            f"Reset verification failed; non-zero tables: {nonzero}"
+        )
     for table in PRESERVED_LOCAL:
         if table not in report["tables"]:
             raise RuntimeError(f"Preserved table missing: {table}")
     admin = sqlite3.connect(path)
     try:
-        if not admin.execute("SELECT 1 FROM users WHERE username='admin' LIMIT 1").fetchone():
+        if not admin.execute(
+            "SELECT 1 FROM users WHERE username='admin' LIMIT 1"
+        ).fetchone():
             raise RuntimeError("Administrator account was not preserved")
     finally:
         admin.close()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DEVELOPMENT / SAMPLE DATA RESET")
+    parser = argparse.ArgumentParser(
+        description="DEVELOPMENT / SAMPLE DATA RESET"
+    )
     parser.add_argument("--database", type=Path, default=LOCAL_DB)
     parser.add_argument("--include-sync-server", action="store_true")
     args = parser.parse_args()
 
     print("DEVELOPMENT / SAMPLE DATA RESET")
     print(f"Local database: {args.database}")
-    print(f"This permanently deletes sample data from: {', '.join(LOCAL_CLEAR_ORDER)}")
-    print("Preserved: schema, indexes, foreign keys, admin/users, roles, permissions, settings")
-    print(f'Type {CONFIRMATION} to continue, or anything else to cancel: ', end="", flush=True)
+    print(
+        f"This permanently deletes sample data from: {', '.join(LOCAL_CLEAR_ORDER)}"
+    )
+    print(
+        "Preserved: schema, indexes, foreign keys, admin/users, roles, permissions, settings"
+    )
+    print(
+        f"Type {CONFIRMATION} to continue, or anything else to cancel: ",
+        end="",
+        flush=True,
+    )
     if sys.stdin.readline().strip() != CONFIRMATION:
         print("Cancelled. No database changes were made.")
         return 0
@@ -172,7 +247,11 @@ def main() -> int:
     sync_backup = None
     sync_deleted = {}
     if args.include_sync_server and SYNC_DB.exists():
-        print(f'Type {CONFIRMATION} again to reset development sync data at {SYNC_DB}: ', end="", flush=True)
+        print(
+            f"Type {CONFIRMATION} again to reset development sync data at {SYNC_DB}: ",
+            end="",
+            flush=True,
+        )
         if sys.stdin.readline().strip() != CONFIRMATION:
             print("Development sync reset skipped; local reset completed.")
         else:
@@ -190,7 +269,9 @@ def main() -> int:
         print("Deleted development sync records:")
         for table, count in sync_deleted.items():
             print(f"  {table}: {count}")
-    print("Verification: cleared local targets are zero; admin and preserved schema/settings tables remain.")
+    print(
+        "Verification: cleared local targets are zero; admin and preserved schema/settings tables remain."
+    )
     print("Remaining local counts:")
     for table in LOCAL_CLEAR_ORDER + PRESERVED_LOCAL:
         print(f"  {table}: {after['counts'].get(table, 0)}")

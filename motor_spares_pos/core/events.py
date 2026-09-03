@@ -22,8 +22,8 @@ from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
-_batch_depth = 0
-_batch_entities = set()
+_batch_depth: int = 0
+_batch_entities: set[str] = set()
 
 try:
     from PySide6.QtCore import QObject, Signal

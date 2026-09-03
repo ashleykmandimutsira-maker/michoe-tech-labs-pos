@@ -3,7 +3,7 @@ User, role, and permission models for Motor Spares POS.
 PHASE 2: Authentication and authorization.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List
 
@@ -11,6 +11,7 @@ from typing import Optional, List
 @dataclass
 class Permission:
     """Permission that can be granted to users."""
+
     id: Optional[int] = None
     code: str = ""
     description: str = ""
@@ -19,36 +20,39 @@ class Permission:
 
     def to_dict(self) -> dict:
         return {
-            'id': self.id,
-            'code': self.code,
-            'description': self.description,
-            'category': self.category,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            "id": self.id,
+            "code": self.code,
+            "description": self.description,
+            "category": self.category,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
         }
 
 
 @dataclass
 class Role:
     """User role (ADMIN, MANAGER, CASHIER, STOCK_CLERK)."""
+
     id: Optional[int] = None
     name: str = ""
     description: str = ""
-    permissions: List[Permission] = None
+    permissions: List[Permission] = field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def __post_init__(self):
-        if self.permissions is None:
-            self.permissions = []
-
     def to_dict(self) -> dict:
         return {
-            'id': self.id,
-            'name': self.name,
-            'description': self.description,
-            'permissions': [p.to_dict() for p in self.permissions],
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "permissions": [p.to_dict() for p in self.permissions],
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at else None
+            ),
         }
 
 
@@ -56,7 +60,7 @@ class Role:
 class User:
     """
     System user with role and permissions.
-    
+
     Attributes:
         id: User ID (auto-generated)
         username: Unique username for login
@@ -72,6 +76,7 @@ class User:
         created_at: Account creation time
         updated_at: Last update time
     """
+
     id: Optional[int] = None
     username: str = ""
     password_hash: str = ""
@@ -80,15 +85,11 @@ class User:
     phone: Optional[str] = None
     role_id: Optional[int] = None
     role: Optional[Role] = None
-    permissions: List[Permission] = None
+    permissions: List[Permission] = field(default_factory=list)
     is_active: bool = True
     last_login: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    def __post_init__(self):
-        if self.permissions is None:
-            self.permissions = []
 
     def has_permission(self, permission_code: str) -> bool:
         """Check if user has a specific permission."""
@@ -104,35 +105,41 @@ class User:
 
     def is_admin(self) -> bool:
         """Check if user is an administrator."""
-        return self.role and self.role.name == 'ADMIN'
+        return self.role is not None and self.role.name == "ADMIN"
 
     def is_manager(self) -> bool:
         """Check if user is a manager."""
-        return self.role and self.role.name == 'MANAGER'
+        return self.role is not None and self.role.name == "MANAGER"
 
     def is_cashier(self) -> bool:
         """Check if user is a cashier."""
-        return self.role and self.role.name == 'CASHIER'
+        return self.role is not None and self.role.name == "CASHIER"
 
     def is_stock_clerk(self) -> bool:
         """Check if user is a stock clerk."""
-        return self.role and self.role.name == 'STOCK_CLERK'
+        return self.role is not None and self.role.name == "STOCK_CLERK"
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization (excluding password hash)."""
         return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email,
-            'full_name': self.full_name,
-            'phone': self.phone,
-            'role_id': self.role_id,
-            'role': self.role.to_dict() if self.role else None,
-            'permissions': [p.to_dict() for p in self.permissions],
-            'is_active': self.is_active,
-            'last_login': self.last_login.isoformat() if self.last_login else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "full_name": self.full_name,
+            "phone": self.phone,
+            "role_id": self.role_id,
+            "role": self.role.to_dict() if self.role else None,
+            "permissions": [p.to_dict() for p in self.permissions],
+            "is_active": self.is_active,
+            "last_login": (
+                self.last_login.isoformat() if self.last_login else None
+            ),
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at else None
+            ),
         }
 
 
@@ -142,6 +149,7 @@ class AuditLog:
     Audit log entry for sensitive actions.
     Tracks who did what, when, and with what authorization.
     """
+
     id: Optional[int] = None
     action: str = ""
     entity_type: Optional[str] = None
@@ -155,14 +163,16 @@ class AuditLog:
 
     def to_dict(self) -> dict:
         return {
-            'id': self.id,
-            'action': self.action,
-            'entity_type': self.entity_type,
-            'entity_id': self.entity_id,
-            'requesting_user_id': self.requesting_user_id,
-            'approving_user_id': self.approving_user_id,
-            'reason': self.reason,
-            'details': self.details,
-            'status': self.status,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
+            "id": self.id,
+            "action": self.action,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "requesting_user_id": self.requesting_user_id,
+            "approving_user_id": self.approving_user_id,
+            "reason": self.reason,
+            "details": self.details,
+            "status": self.status,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
         }

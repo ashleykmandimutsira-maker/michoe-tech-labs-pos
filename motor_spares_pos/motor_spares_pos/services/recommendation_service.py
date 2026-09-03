@@ -3,6 +3,7 @@
 No recommendations are fabricated here.  The service intentionally exposes a
 stable seam for a future model once the business chooses an implementation.
 """
+
 from services.analytics_service import AnalyticsService
 
 

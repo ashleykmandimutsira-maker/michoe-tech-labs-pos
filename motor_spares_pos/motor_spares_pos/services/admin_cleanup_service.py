@@ -1,4 +1,5 @@
 """Admin-only, backup-first operational data cleanup."""
+
 from datetime import datetime
 from pathlib import Path
 
@@ -15,31 +16,118 @@ class AdminCleanupService:
 
     def backup(self) -> str:
         target = Path(self.db.db_path)
-        backup = target.with_name(f"{target.stem}_before_cleanup_{datetime.now():%Y%m%d_%H%M%S}{target.suffix}")
+        backup = target.with_name(
+            f"{target.stem}_before_cleanup_{datetime.now():%Y%m%d_%H%M%S}{target.suffix}"
+        )
         self.db.backup(str(backup))
         return str(backup)
 
     def cleanup(self, option: str, user_id: int) -> dict:
         permissions = PermissionService()
-        if not permissions.is_admin(user_id) or not permissions.has_permission(user_id, 'system.reset'):
-            raise PermissionError('Only an administrator can run system cleanup')
-        valid = {'inventory', 'customers', 'quotations', 'sales_invoices', 'full'}
+        if not permissions.is_admin(user_id) or not permissions.has_permission(
+            user_id, "system.reset"
+        ):
+            raise PermissionError(
+                "Only an administrator can run system cleanup"
+            )
+        valid = {
+            "inventory",
+            "customers",
+            "quotations",
+            "sales_invoices",
+            "full",
+        }
         if option not in valid:
-            raise ValueError('Invalid cleanup option')
+            raise ValueError("Invalid cleanup option")
         backup = self.backup()
-        results = {'backup': backup, 'archived_products': 0, 'archived_customers': 0, 'cancelled_quotes': 0, 'voided_invoices': 0}
-        if option in {'inventory', 'full'}:
-            results['archived_products'] = ProductService().archive_all_active_products(user_id, 'Administrative data cleanup', request_sync=False)
+        results = {
+            "backup": backup,
+            "archived_products": 0,
+            "archived_customers": 0,
+            "cancelled_quotes": 0,
+            "voided_invoices": 0,
+        }
+        if option in {"inventory", "full"}:
+            results[
+                "archived_products"
+            ] = ProductService().archive_all_active_products(
+                user_id, "Administrative data cleanup", request_sync=False
+            )
         with self.db.transaction() as conn:
-            if option in {'customers', 'full'}:
-                results['archived_customers'] = conn.execute('UPDATE customers SET active=0,updated_at=CURRENT_TIMESTAMP WHERE active=1').rowcount
-                conn.execute('UPDATE vehicles SET active=0,updated_at=CURRENT_TIMESTAMP WHERE active=1')
-            if option in {'quotations', 'full'}:
-                results['cancelled_quotes'] = conn.execute("UPDATE quotations SET status='CANCELLED',updated_at=CURRENT_TIMESTAMP WHERE status IN ('DRAFT','ISSUED')").rowcount
-        if option in {'sales_invoices', 'full'}:
-            invoices = self.db.execute_query("SELECT invoice_number FROM invoices WHERE status NOT IN ('VOIDED','DRAFT')")
-            for invoice in invoices:
-                SalesService().void_invoice(invoice['invoice_number'], user_id, 'Administrative data cleanup')
-            results['voided_invoices'] = len(invoices)
-        AuditService().log_action('SYSTEM_DATA_CLEANUP', 'SYSTEM', None, user_id, details=f'{option}; backup: {backup}; {results}')
+            if option in {"customers", "full"}:
+                results["archived_customers"] = conn.execute(
+                    "UPDATE customers SET active=0,updated_at=CURRENT_TIMESTAMP WHERE active=1"
+                ).rowcount
+                conn.execute(
+                    "UPDATE vehicles SET active=0,updated_at=CURRENT_TIMESTAMP WHERE active=1"
+                )
+            if option in {"quotations", "full"}:
+                results["cancelled_quotes"] = conn.execute(
+                    "UPDATE quotations SET status='CANCELLED',updated_at=CURRENT_TIMESTAMP WHERE status IN ('DRAFT','ISSUED')"
+                ).rowcount
+        if option in {"sales_invoices", "full"}:
+            invoices = self.db.execute_query(
+                "SELECT id,invoice_number FROM invoices WHERE status NOT IN ('VOIDED','DRAFT')"
+            )
+            # For non-full cleanups we void invoices (preserve audit/payment history).
+            if option == "sales_invoices":
+                for invoice in invoices:
+                    SalesService().void_invoice(
+                        invoice["invoice_number"],
+                        user_id,
+                        "Administrative data cleanup",
+                    )
+                results["voided_invoices"] = len(invoices)
+            else:
+                # Full reset: physically delete business data while preserving schema, settings and users.
+                # Order matters because of FK constraints.
+                clear_order = [
+                    "return_items",
+                    "refunds",
+                    "sale_items",
+                    "payments",
+                    "invoices",
+                    "returns",
+                    "stock_movements",
+                    "sales",
+                    "quotation_items",
+                    "quotations",
+                    "held_sales",
+                    "sync_queue",
+                    "sync_log",
+                    "audit_logs",
+                    "product_tombstones",
+                    "products",
+                    "customers",
+                    "categories",
+                    "vehicle_models",
+                ]
+                with self.db.transaction() as conn:
+                    # Null-out foreign links that would block deletes
+                    if "returns" in clear_order and "invoices" in clear_order:
+                        conn.execute("UPDATE returns SET original_invoice_id=NULL")
+                    for table in clear_order:
+                        try:
+                            conn.execute(f'DELETE FROM "{table}"')
+                        except Exception:
+                            # Best-effort: skip tables that don't exist in older schemas
+                            continue
+                    # Reset sequences for cleared tables
+                    placeholders = ",".join("?" for _ in clear_order)
+                    try:
+                        conn.execute(
+                            f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                            clear_order,
+                        )
+                    except Exception:
+                        # ignore if sqlite_sequence not present or some names missing
+                        pass
+                results["voided_invoices"] = len(invoices)
+        AuditService().log_action(
+            "SYSTEM_DATA_CLEANUP",
+            "SYSTEM",
+            None,
+            user_id,
+            details=f"{option}; backup: {backup}; {results}",
+        )
         return results

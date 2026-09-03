@@ -36,7 +36,7 @@ class InventoryService:
     ) -> int:
         """
         Record a stock movement and update product quantity.
-        
+
         Args:
             product_id: Product ID
             movement_type: Type of movement (PURCHASE, SALE, RETURN, ADJUSTMENT, DAMAGE, TRANSFER, VOID)
@@ -44,19 +44,21 @@ class InventoryService:
             reference: Reference number (invoice, PO, etc.)
             user_id: User who made the movement
             notes: Additional notes
-            
+
         Returns:
             Stock movement record ID
-            
+
         Raises:
             ValueError: If movement type is invalid or insufficient stock for SALE
         """
         # Validate movement type
         if movement_type not in StockMovement.VALID_TYPES:
             raise ValueError(f"Invalid movement type: {movement_type}")
-        if movement_type == 'ADJUSTMENT':
+        if movement_type == "ADJUSTMENT":
             if not isinstance(quantity, int) or quantity == 0:
-                raise ValueError("Adjustment quantity must be a non-zero integer")
+                raise ValueError(
+                    "Adjustment quantity must be a non-zero integer"
+                )
         elif quantity < 0:
             raise ValueError("Stock movement quantity cannot be negative")
 
@@ -68,11 +70,11 @@ class InventoryService:
         previous_quantity = product.quantity_on_hand
 
         # Calculate new quantity based on movement type
-        if movement_type in ['PURCHASE', 'RETURN', 'ADJUSTMENT']:
+        if movement_type in ["PURCHASE", "RETURN", "ADJUSTMENT"]:
             new_quantity = previous_quantity + quantity
-        elif movement_type in ['SALE', 'DAMAGE', 'TRANSFER', 'VOID']:
+        elif movement_type in ["SALE", "DAMAGE", "TRANSFER", "VOID"]:
             # Check if enough stock for sale
-            if movement_type == 'SALE' and quantity > previous_quantity:
+            if movement_type == "SALE" and quantity > previous_quantity:
                 raise ValueError(
                     f"Insufficient stock for product {product.part_no}. "
                     f"Available: {previous_quantity}, Requested: {quantity}"
@@ -83,12 +85,23 @@ class InventoryService:
 
         # Ensure quantity doesn't go negative
         if new_quantity < 0:
-            raise ValueError(f"Insufficient stock for product {product.part_no}")
+            raise ValueError(
+                f"Insufficient stock for product {product.part_no}"
+            )
 
         with self.db.transaction() as conn:
             movement_id = conn.execute(
                 "INSERT INTO stock_movements (product_id,movement_type,quantity,previous_quantity,new_quantity,reference,user_id,notes) VALUES (?,?,?,?,?,?,?,?)",
-                (product_id, movement_type, quantity, previous_quantity, new_quantity, reference, user_id, notes),
+                (
+                    product_id,
+                    movement_type,
+                    quantity,
+                    previous_quantity,
+                    new_quantity,
+                    reference,
+                    user_id,
+                    notes,
+                ),
             ).lastrowid
             conn.execute(
                 "UPDATE products SET quantity_on_hand = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -97,11 +110,21 @@ class InventoryService:
 
         movement = self.get_stock_movement(movement_id)
         if movement:
-            self.sync.enqueue("STOCK_MOVEMENT", movement_id, "CREATE", json.dumps(movement.to_dict()))
+            self.sync.enqueue(
+                "STOCK_MOVEMENT",
+                movement_id,
+                "CREATE",
+                json.dumps(movement.to_dict()),
+            )
             self.sync.request_background_sync()
         updated_product = self.product_service.get_product_by_id(product_id)
         if updated_product:
-            self.sync.enqueue("PRODUCT", product_id, "UPDATE", json.dumps(updated_product.to_dict()))
+            self.sync.enqueue(
+                "PRODUCT",
+                product_id,
+                "UPDATE",
+                json.dumps(updated_product.to_dict()),
+            )
             self.sync.request_background_sync()
 
         logger.info(
@@ -165,12 +188,12 @@ class InventoryService:
     ) -> List[StockMovement]:
         """
         Get stock movement history for a product.
-        
+
         Args:
             product_id: Product ID
             limit: Number of records to return
             offset: Starting position
-            
+
         Returns:
             List of StockMovement objects
         """
@@ -186,10 +209,10 @@ class InventoryService:
     def get_recent_movements(self, limit: int = 50) -> List[StockMovement]:
         """
         Get the most recent stock movements across all products.
-        
+
         Args:
             limit: Number of recent movements to return
-            
+
         Returns:
             List of StockMovement objects
         """
@@ -208,11 +231,11 @@ class InventoryService:
     ) -> List[StockMovement]:
         """
         Get stock movements filtered by type.
-        
+
         Args:
             movement_type: Type of movement to filter by
             limit: Number of records to return
-            
+
         Returns:
             List of StockMovement objects
         """
@@ -234,19 +257,19 @@ class InventoryService:
     ) -> int:
         """
         Adjust stock for a product (inventory correction, damage, etc.).
-        
+
         Args:
             product_id: Product ID
             quantity_change: Amount to add/subtract
             reason: Reason for adjustment
             user_id: User making adjustment
-            
+
         Returns:
             Movement record ID
         """
         return self.record_stock_movement(
             product_id=product_id,
-            movement_type='ADJUSTMENT',
+            movement_type="ADJUSTMENT",
             quantity=quantity_change,
             reference=None,
             user_id=user_id,
@@ -262,19 +285,19 @@ class InventoryService:
     ) -> int:
         """
         Receive stock from a supplier (purchase order received).
-        
+
         Args:
             product_id: Product ID
             quantity: Quantity received
             po_number: Purchase order number
             user_id: Receiving user
-            
+
         Returns:
             Movement record ID
         """
         return self.record_stock_movement(
             product_id=product_id,
-            movement_type='PURCHASE',
+            movement_type="PURCHASE",
             quantity=quantity,
             reference=po_number,
             user_id=user_id,
@@ -290,22 +313,22 @@ class InventoryService:
     ) -> int:
         """
         Record a sale (deduct from stock).
-        
+
         Args:
             product_id: Product ID
             quantity: Quantity sold
             invoice_number: Invoice/receipt number
             user_id: Selling user
-            
+
         Returns:
             Movement record ID
-            
+
         Raises:
             ValueError: If insufficient stock
         """
         return self.record_stock_movement(
             product_id=product_id,
-            movement_type='SALE',
+            movement_type="SALE",
             quantity=quantity,
             reference=invoice_number,
             user_id=user_id,
@@ -321,19 +344,19 @@ class InventoryService:
     ) -> int:
         """
         Process a customer return.
-        
+
         Args:
             product_id: Product ID
             quantity: Quantity returned
             reason: Return reason
             user_id: Receiving user
-            
+
         Returns:
             Movement record ID
         """
         return self.record_stock_movement(
             product_id=product_id,
-            movement_type='RETURN',
+            movement_type="RETURN",
             quantity=quantity,
             reference=None,
             user_id=user_id,
@@ -349,19 +372,19 @@ class InventoryService:
     ) -> int:
         """
         Report damaged/destroyed stock.
-        
+
         Args:
             product_id: Product ID
             quantity: Quantity damaged
             reason: Damage reason
             user_id: Reporting user
-            
+
         Returns:
             Movement record ID
         """
         return self.record_stock_movement(
             product_id=product_id,
-            movement_type='DAMAGE',
+            movement_type="DAMAGE",
             quantity=quantity,
             reference=None,
             user_id=user_id,
@@ -377,19 +400,19 @@ class InventoryService:
     ) -> int:
         """
         Transfer stock to another location.
-        
+
         Args:
             product_id: Product ID
             quantity: Quantity transferred
             destination: Destination location
             user_id: Transferring user
-            
+
         Returns:
             Movement record ID
         """
         return self.record_stock_movement(
             product_id=product_id,
-            movement_type='TRANSFER',
+            movement_type="TRANSFER",
             quantity=quantity,
             reference=None,
             user_id=user_id,
@@ -425,14 +448,25 @@ class InventoryService:
             return None
 
         direction = "increase" if delta > 0 else "decrease"
-        notes = reason or f"Stock count correction ({direction} of {abs(delta)})"
+        notes = (
+            reason or f"Stock count correction ({direction} of {abs(delta)})"
+        )
 
         if new_quantity < 0:
             raise ValueError("Stock quantity cannot be negative")
         with self.db.transaction() as conn:
             movement_id = conn.execute(
                 "INSERT INTO stock_movements (product_id,movement_type,quantity,previous_quantity,new_quantity,reference,user_id,notes) VALUES (?,?,?,?,?,?,?,?)",
-                (product_id, "ADJUSTMENT", delta, previous_quantity, new_quantity, reference, user_id, notes),
+                (
+                    product_id,
+                    "ADJUSTMENT",
+                    delta,
+                    previous_quantity,
+                    new_quantity,
+                    reference,
+                    user_id,
+                    notes,
+                ),
             ).lastrowid
             conn.execute(
                 "UPDATE products SET quantity_on_hand = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -441,16 +475,29 @@ class InventoryService:
 
         movement = self.get_stock_movement(movement_id)
         if movement:
-            self.sync.enqueue("STOCK_MOVEMENT", movement_id, "CREATE", json.dumps(movement.to_dict()))
+            self.sync.enqueue(
+                "STOCK_MOVEMENT",
+                movement_id,
+                "CREATE",
+                json.dumps(movement.to_dict()),
+            )
             self.sync.request_background_sync()
         updated_product = self.product_service.get_product_by_id(product_id)
         if updated_product:
-            self.sync.enqueue("PRODUCT", product_id, "UPDATE", json.dumps(updated_product.to_dict()))
+            self.sync.enqueue(
+                "PRODUCT",
+                product_id,
+                "UPDATE",
+                json.dumps(updated_product.to_dict()),
+            )
             self.sync.request_background_sync()
 
         logger.info(
             "Stock level corrected: %s %s -> %s (ID: %s)",
-            product.part_no, previous_quantity, new_quantity, movement_id,
+            product.part_no,
+            previous_quantity,
+            new_quantity,
+            movement_id,
         )
         return movement_id
 
@@ -462,7 +509,7 @@ class InventoryService:
     def get_movement_summary(self, product_id: int) -> dict:
         """
         Get movement summary for a product.
-        
+
         Returns dictionary with total movements by type.
         """
         query = """
@@ -478,9 +525,9 @@ class InventoryService:
 
         summary = {}
         for row in results:
-            summary[row['movement_type']] = {
-                'count': row['count'],
-                'total_quantity': row['total_quantity'],
+            summary[row["movement_type"]] = {
+                "count": row["count"],
+                "total_quantity": row["total_quantity"],
             }
         return summary
 
@@ -488,14 +535,18 @@ class InventoryService:
     def _row_to_stock_movement(row) -> StockMovement:
         """Convert database row to StockMovement object."""
         return StockMovement(
-            id=row['id'],
-            product_id=row['product_id'],
-            movement_type=row['movement_type'],
-            quantity=row['quantity'],
-            previous_quantity=row['previous_quantity'],
-            new_quantity=row['new_quantity'],
-            reference=row['reference'],
-            user_id=row['user_id'],
-            notes=row['notes'],
-            created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None,
+            id=row["id"],
+            product_id=row["product_id"],
+            movement_type=row["movement_type"],
+            quantity=row["quantity"],
+            previous_quantity=row["previous_quantity"],
+            new_quantity=row["new_quantity"],
+            reference=row["reference"],
+            user_id=row["user_id"],
+            notes=row["notes"],
+            created_at=(
+                datetime.fromisoformat(row["created_at"])
+                if row["created_at"]
+                else None
+            ),
         )
