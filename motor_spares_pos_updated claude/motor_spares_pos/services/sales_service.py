@@ -928,16 +928,31 @@ class SalesService:
         # After reversing stock and recording sale-level audit, mark the invoice VOIDED and update payments
         # so the invoice no longer appears in active invoice registers or financial reports. Preserve audit_logs.
         try:
-            with self.db.transaction() as conn:
-                # Mark invoice as voided (logical delete) so history remains for audit but it's excluded from reports
-                conn.execute("UPDATE invoices SET status='VOIDED' WHERE id=?", (invoice["id"],))
-                # Mark payments as refunded/cancelled so they don't count as active receipts
-                conn.execute("UPDATE payments SET status='REFUNDED' WHERE sale_id=?", (invoice["sale_id"],))
-                # Remove any pending sync queue entries for this sale/invoice to avoid duplicate/ghost syncs
-                conn.execute(
-                    "DELETE FROM sync_queue WHERE (entity_type='SALE' AND entity_id=?) OR (entity_type='INVOICE' AND entity_id=?)",
-                    (invoice["sale_id"], invoice["id"]),
-                )
+            try:
+                with self.db.transaction() as conn:
+                    # Prefer to set voided_by/voided_at/void_reason when schema supports it so tests and audit expectations pass.
+                    try:
+                        voided_at = self.db.local_now_str()
+                        conn.execute(
+                            "UPDATE invoices SET status='VOIDED', voided_by=?, voided_at=?, void_reason=? WHERE id=?",
+                            (user_id, voided_at, reason or None, invoice["id"]),
+                        )
+                    except Exception:
+                        # Older schemas may not have voided_* columns; fall back to minimal status update
+                        conn.execute(
+                            "UPDATE invoices SET status='VOIDED' WHERE id=?",
+                            (invoice["id"],),
+                        )
+                    # Mark payments as refunded/cancelled so they don't count as active receipts
+                    conn.execute("UPDATE payments SET status='REFUNDED' WHERE sale_id=?", (invoice["sale_id"],))
+                    # Remove any pending sync queue entries for this sale/invoice to avoid duplicate/ghost syncs
+                    conn.execute(
+                        "DELETE FROM sync_queue WHERE (entity_type='SALE' AND entity_id=?) OR (entity_type='INVOICE' AND entity_id=?)",
+                        (invoice["sale_id"], invoice["id"]),
+                    )
+            except Exception as e:
+                logger.exception("Failed to mark invoice as voided: %s", e)
+                raise
             AuditService().log_action(
                 "INVOICE_VOIDED",
                 "INVOICE",
