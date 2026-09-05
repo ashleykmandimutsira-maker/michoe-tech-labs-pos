@@ -4,16 +4,17 @@ import logging
 import json
 import re
 import time
+from html import escape
 from pathlib import Path
-from PySide6.QtCore import Qt, QSize, QDate, QStringListModel, QTimer, QObject, QThread, Signal
-from PySide6.QtGui import QPixmap, QIcon, QColor, QPainter, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QSize, QSizeF, QDate, QStringListModel, QTimer, QObject, QThread, Signal
+from PySide6.QtGui import QPixmap, QIcon, QColor, QPainter, QKeySequence, QShortcut, QStandardItem, QStandardItemModel, QPageSize, QPageLayout, QFont
 from PySide6.QtGui import QTextDocument
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication,QDialog,QFrame,QGridLayout,QHBoxLayout,QLabel,QLineEdit,QMainWindow,
     QMessageBox,QPushButton,QStackedWidget,QTableWidget,QTableWidgetItem,QVBoxLayout,QHeaderView,
     QAbstractItemView,QAbstractSpinBox,QWidget,QFormLayout,QComboBox,QSpinBox,QDialogButtonBox,QTextEdit,QInputDialog,QToolButton,
-    QCheckBox,QScrollArea,QSizePolicy,QDateEdit,QCompleter,QFileDialog)
+    QCheckBox,QScrollArea,QSizePolicy,QDateEdit,QCompleter,QFileDialog,QFontComboBox)
 from PySide6.QtCharts import QChart,QChartView,QValueAxis,QBarSeries,QBarSet,QBarCategoryAxis,QPieSeries
 from services.auth_service import AuthenticationService
 from services.product_service import ProductService
@@ -937,8 +938,15 @@ class POSPage(QWidget):
             self.print_receipt_btn.setEnabled(True)
             self.search('')
             self.scan.setFocus()
+            if self._auto_print_enabled():
+                self.print_receipt()
         except Exception as e:
             QMessageBox.critical(self, 'Payment failed', str(e))
+
+    @staticmethod
+    def _auto_print_enabled():
+        rows = get_database_manager().execute_query("SELECT value FROM settings WHERE key='auto_print'")
+        return bool(rows and rows[0]['value'] == '1')
 
     def hold_sale(self):
         if not self.cart:
@@ -1289,9 +1297,113 @@ class ProductsPage(QWidget):
             self.load(self.search_box.text()); QMessageBox.information(self,'Completed',f'{action} completed successfully.')
         except Exception as e: QMessageBox.critical(self,f'{action} failed',str(e))
 
+INVOICE_DEFAULTS = {
+    'business_name': 'Michoe Tech Labs', 'business_address': 'Harare, Zimbabwe',
+    'business_phone': '', 'business_email': '', 'title': 'TAX INVOICE',
+    'template': 'Professional', 'paper_size': 'A4', 'orientation': 'Portrait',
+    'font': 'Arial', 'font_size': 10, 'accent': '#0F5E9C',
+    'show_logo': True, 'show_vat': True, 'show_customer': True, 'show_vehicle': True,
+    'show_part_no': True, 'show_cashier': True, 'show_payment': True,
+    'show_amount_paid': True, 'show_change': True, 'show_discount': True,
+    'show_notes': True, 'show_terms': True, 'show_footer': True,
+    'terms': 'Goods sold are subject to our terms and conditions.',
+    'footer': 'Thank you for choosing Michoe Tech Labs.',
+}
+
+def invoice_design_settings():
+    rows = get_database_manager().execute_query("SELECT value FROM settings WHERE key='invoice_designer'")
+    try: saved = json.loads(rows[0]['value']) if rows else {}
+    except (ValueError, TypeError): saved = {}
+    defaults = dict(INVOICE_DEFAULTS)
+    company = {row['key']: row['value'] for row in get_database_manager().execute_query("SELECT key,value FROM settings WHERE key IN ('company_name','company_phone')")}
+    defaults['business_name'] = saved.get('business_name') or company.get('company_name') or defaults['business_name']
+    defaults['business_phone'] = saved.get('business_phone') or company.get('company_phone') or ''
+    defaults.update(saved)
+    return defaults
+
+def save_invoice_design_settings(values):
+    get_database_manager().execute_update(
+        "INSERT INTO settings(key,value,data_type) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
+        ('invoice_designer', json.dumps(values), 'json'),
+    )
+    emit_change('INVOICE_SETTINGS', values)
+
+def invoice_html(sale, values):
+    """Render saved transaction values with presentation-only invoice settings."""
+    accent = escape(values['accent'])
+    template = values['template']
+    compact = template in ('Minimal', 'Thermal Receipt') or values['paper_size'] == '80mm thermal'
+    width = '80mm' if compact else '100%'
+    logo_path = (ROOT / 'assets' / 'logo' / 'michoe-robot-mark.png').as_uri()
+    logo = f"<img src='{logo_path}' width='42' height='42'/>" if values['show_logo'] else ''
+    customer = '<br>'.join(escape(str(v)) for v in (sale.customer_name, sale.customer_phone, sale.customer_email, sale.customer_city) if v) or 'Walk-in customer'
+    vehicle = ' · '.join(escape(str(v)) for v in (sale.vehicle_make, sale.vehicle_model, sale.vehicle_registration) if v)
+    rows = []
+    for item in sale.items:
+        part = f"<td>{escape(item.part_no)}</td>" if values['show_part_no'] else ''
+        rows.append(f"<tr>{part}<td>{escape(item.product_name)}</td><td align='right'>{item.quantity}</td><td align='right'>{money(item.unit_price)}</td><td align='right'>{money(item.line_total)}</td></tr>")
+    part_head = '<th>Part no.</th>' if values['show_part_no'] else ''
+    vat_rates = sorted({float(getattr(item, 'vat_rate', 0) or 0) for item in sale.items})
+    vat_label = 'VAT' if not vat_rates else 'VAT (' + ', '.join(f'{rate:g}%' for rate in vat_rates) + ')'
+    created = sale.created_at.strftime('%d %b %Y, %H:%M') if sale.created_at else ''
+    payments = getattr(sale, 'payments', [])
+    methods = ', '.join(escape((p.payment_method or '').replace('_', ' ').title()) for p in payments) or '—'
+    paid = sum(float(p.amount or 0) for p in payments)
+    change = sum(float(p.change or 0) for p in payments)
+    customer_html = f"<section><b>Bill to</b><br>{customer}</section>" if values['show_customer'] else ''
+    vehicle_html = f"<section><b>Vehicle</b><br>{vehicle}</section>" if values['show_vehicle'] and vehicle else ''
+    cashier_html = f"<br>Cashier: {escape(sale.cashier_name or '—')}" if values['show_cashier'] else ''
+    vat_html = f"<br>{vat_label}: {money(sale.vat_amount)}" if values['show_vat'] else ''
+    discount_html = f"<br>Discount: {money(sale.discount_amount)}" if values['show_discount'] and sale.discount_amount else ''
+    payment_html = '' if not values['show_payment'] else f"<section><b>Payment</b><br>Method: {methods}{f'<br>Amount paid: {money(paid)}' if values['show_amount_paid'] else ''}{f'<br>Change: {money(change)}' if values['show_change'] else ''}</section>"
+    notes_html = f"<section><b>Notes</b><br>{escape(sale.notes)}</section>" if values['show_notes'] and sale.notes else ''
+    terms_html = f"<p class='small'><b>Terms:</b> {escape(values['terms'])}</p>" if values['show_terms'] and values['terms'] else ''
+    footer_html = f"<footer>{escape(values['footer'])}</footer>" if values['show_footer'] and values['footer'] else ''
+    style = f"font-family:'{escape(values['font'])}';font-size:{int(values['font_size'])}pt;"
+    if template == 'Modern': style += 'border-top:7px solid ' + accent + ';padding-top:12px;'
+    if template == 'Minimal': style += 'color:#334155;'
+    if compact: style += 'width:80mm;margin:0;font-size:8pt;'
+    return f"""<html><head><style>body{{{style}}} .accent{{color:{accent};}} header{{display:block;border-bottom:2px solid {accent};padding-bottom:9px}} .brand{{font-size:18pt;font-weight:bold}} .meta{{float:right;text-align:right}} section{{margin:12px 0}} table{{border-collapse:collapse;width:{width};margin-top:12px}} th{{background:{accent};color:#fff;padding:6px;text-align:left}} td{{border-bottom:1px solid #dbe3ea;padding:6px}} .totals{{text-align:right;margin-top:12px;font-size:11pt}} .small{{font-size:8pt;color:#475569}} footer{{margin-top:16px;padding-top:8px;border-top:1px solid #dbe3ea;text-align:center;color:#475569}}</style></head><body><header>{logo}<span class='brand accent'>{escape(values['business_name'])}</span><br><span>{escape(values['business_address'])}<br>{escape(values['business_phone'])} {escape(values['business_email'])}</span><span class='meta'><b class='accent'>{escape(values['title'])}</b><br>Invoice: {escape(sale.invoice_number)}<br>{escape(created)}<br>Status: {escape(sale.status)}{cashier_html}</span></header>{customer_html}{vehicle_html}<table><tr>{part_head}<th>Description</th><th>Qty</th><th>Unit price</th><th>Line total</th></tr>{''.join(rows)}</table><p class='totals'>Subtotal: {money(sale.subtotal)}{vat_html}{discount_html}<br><b>Total: {money(sale.total)}</b></p>{payment_html}{notes_html}{terms_html}{footer_html}</body></html>"""
+
+class InvoiceSettingsDialog(QDialog):
+    """Presentation settings only; sales and tax values are never edited here."""
+    def __init__(self, parent=None):
+        super().__init__(parent); self.setWindowTitle('Invoice Settings'); self.resize(1050, 720); self.values = invoice_design_settings()
+        layout = QHBoxLayout(self); controls = QWidget(); form = QFormLayout(controls); form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.business_name=QLineEdit(self.values['business_name']); self.address=QLineEdit(self.values['business_address']); self.phone=QLineEdit(self.values['business_phone']); self.email=QLineEdit(self.values['business_email']); self.title=QLineEdit(self.values['title'])
+        self.template=QComboBox(); self.template.addItems(['Professional','Modern','Minimal','Thermal Receipt','Custom']); self.template.setCurrentText(self.values['template'])
+        self.paper=QComboBox(); self.paper.addItems(['A4','A5','80mm thermal']); self.paper.setCurrentText(self.values['paper_size']); self.orientation=QComboBox(); self.orientation.addItems(['Portrait','Landscape']); self.orientation.setCurrentText(self.values['orientation'])
+        self.font=QFontComboBox(); self.font.setCurrentFont(QFont(self.values['font'])); self.size=QSpinBox(); self.size.setRange(7,18); self.size.setValue(int(self.values['font_size'])); self.accent=QLineEdit(self.values['accent']); self.accent.setPlaceholderText('#0F5E9C')
+        for label, widget in [('Business name',self.business_name),('Address',self.address),('Phone',self.phone),('Email',self.email),('Invoice title',self.title),('Template',self.template),('Paper size',self.paper),('Orientation',self.orientation),('Font',self.font),('Font size',self.size),('Accent colour',self.accent)]: form.addRow(label,widget)
+        self.toggles={}
+        labels={'show_logo':'Show logo','show_vat':'Show VAT','show_customer':'Show customer','show_vehicle':'Show vehicle','show_part_no':'Show part number','show_cashier':'Show cashier','show_payment':'Show payment information','show_amount_paid':'Show amount paid','show_change':'Show change','show_discount':'Show discount','show_notes':'Show notes','show_terms':'Show terms','show_footer':'Show footer'}
+        for key,label in labels.items(): box=QCheckBox(label); box.setChecked(bool(self.values[key])); self.toggles[key]=box; form.addRow('',box)
+        self.terms=QLineEdit(self.values['terms']); self.footer=QLineEdit(self.values['footer']); form.addRow('Terms',self.terms); form.addRow('Footer',self.footer)
+        buttons=QDialogButtonBox(); save=buttons.addButton('Save Settings',QDialogButtonBox.AcceptRole); reset=buttons.addButton('Reset to Default',QDialogButtonBox.ResetRole); buttons.addButton(QDialogButtonBox.Cancel); save.clicked.connect(self.save); reset.clicked.connect(self.reset); buttons.rejected.connect(self.reject); form.addRow(buttons)
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(controls); layout.addWidget(scroll,1); self.preview=QTextEdit(); self.preview.setReadOnly(True); layout.addWidget(self.preview,1)
+        for widget in [self.business_name,self.address,self.phone,self.email,self.title,self.template,self.paper,self.orientation,self.font,self.size,self.accent,self.terms,self.footer,*self.toggles.values()]:
+            signal = getattr(widget,'textChanged',None) or getattr(widget,'currentTextChanged',None) or getattr(widget,'valueChanged',None) or getattr(widget,'toggled',None)
+            signal.connect(self.refresh_preview)
+        self.refresh_preview()
+    def collected(self):
+        values=dict(INVOICE_DEFAULTS); values.update({'business_name':self.business_name.text().strip() or INVOICE_DEFAULTS['business_name'],'business_address':self.address.text().strip(),'business_phone':self.phone.text().strip(),'business_email':self.email.text().strip(),'title':self.title.text().strip() or INVOICE_DEFAULTS['title'],'template':self.template.currentText(),'paper_size':self.paper.currentText(),'orientation':self.orientation.currentText(),'font':self.font.currentFont().family(),'font_size':self.size.value(),'accent':self.accent.text().strip() or INVOICE_DEFAULTS['accent'],'terms':self.terms.text().strip(),'footer':self.footer.text().strip()}); values.update({key:box.isChecked() for key,box in self.toggles.items()}); return values
+    def refresh_preview(self):
+        class Sample: pass
+        tax_rows = get_database_manager().execute_query("SELECT value FROM settings WHERE key='tax_rate'")
+        try: tax_rate = float(tax_rows[0]['value']) if tax_rows else 15.0
+        except (TypeError, ValueError): tax_rate = 15.0
+        sale=Sample(); sale.invoice_number='INV-PREVIEW'; sale.created_at=system_clock.now(); sale.status='COMPLETED'; sale.cashier_name='Cashier'; sale.customer_name='Walk-in Customer'; sale.customer_phone='077 000 0000'; sale.customer_email=''; sale.customer_city='Harare'; sale.vehicle_make='Toyota'; sale.vehicle_model='Corolla'; sale.vehicle_registration='ABC 1234'; sale.subtotal=100; sale.vat_amount=100*tax_rate/100; sale.discount_amount=0; sale.total=sale.subtotal+sale.vat_amount; sale.notes='Thank you for your business.'; sale.payments=[]
+        item=Sample(); item.part_no='SP-001'; item.product_name='Brake pads'; item.quantity=1; item.unit_price=100; item.line_total=100; sale.items=[item]; self.preview.setHtml(invoice_html(sale,self.collected()))
+    def save(self): save_invoice_design_settings(self.collected()); self.accept()
+    def reset(self):
+        values = dict(INVOICE_DEFAULTS)
+        self.business_name.setText(values['business_name']); self.address.setText(values['business_address']); self.phone.setText(values['business_phone']); self.email.setText(values['business_email']); self.title.setText(values['title']); self.template.setCurrentText(values['template']); self.paper.setCurrentText(values['paper_size']); self.orientation.setCurrentText(values['orientation']); self.font.setCurrentFont(QFont(values['font'])); self.size.setValue(values['font_size']); self.accent.setText(values['accent']); self.terms.setText(values['terms']); self.footer.setText(values['footer'])
+        for key, box in self.toggles.items(): box.setChecked(values[key])
+        self.refresh_preview()
+
 class InvoicesPage(QWidget):
     def __init__(self, user=None):
-        super().__init__(); self.user=user; self.sales=SalesService(); l=QVBoxLayout(self); l.setContentsMargins(28,24,28,24); h=QHBoxLayout(); t=QLabel('Invoices'); t.setObjectName('pageTitle'); h.addWidget(t); h.addStretch(); self.search_box=QLineEdit(); self.search_box.setPlaceholderText('Search invoice or customer'); self.search_box.returnPressed.connect(self.load); h.addWidget(self.search_box); b=QPushButton('Search'); b.setIcon(icon('search')); b.clicked.connect(self.load); h.addWidget(b); self.void_btn=QPushButton('Void invoice'); self.void_btn.setIcon(icon('delete')); self.void_btn.setEnabled(bool(user and user.is_admin())); self.void_btn.clicked.connect(self.void_selected); h.addWidget(self.void_btn); self.delete_draft_btn=QPushButton('Delete draft'); self.delete_draft_btn.setIcon(icon('delete')); self.delete_draft_btn.setEnabled(bool(user and user.has_permission('invoices.view'))); self.delete_draft_btn.clicked.connect(self.delete_selected_draft); h.addWidget(self.delete_draft_btn); l.addLayout(h); self.table=QTableWidget(0,5); self.table.setHorizontalHeaderLabels(['Invoice','Customer','Subtotal','Total','Status']); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); setup_table(self.table); self.table.cellDoubleClicked.connect(self.preview); l.addWidget(self.table,1); self.load()
+        super().__init__(); self.user=user; self.sales=SalesService(); l=QVBoxLayout(self); l.setContentsMargins(28,24,28,24); h=QHBoxLayout(); t=QLabel('Invoices'); t.setObjectName('pageTitle'); h.addWidget(t); h.addStretch(); self.search_box=QLineEdit(); self.search_box.setPlaceholderText('Search invoice or customer'); self.search_box.returnPressed.connect(self.load); h.addWidget(self.search_box); b=QPushButton('Search'); b.setIcon(icon('search')); b.clicked.connect(self.load); h.addWidget(b); self.settings_btn=QPushButton('Invoice Settings'); self.settings_btn.setIcon(icon('settings')); self.settings_btn.setEnabled(bool(user and user.is_admin())); self.settings_btn.clicked.connect(self.open_invoice_settings); h.addWidget(self.settings_btn); self.print_btn=QPushButton('Print invoice'); self.print_btn.setIcon(icon('print')); self.print_btn.setEnabled(bool(user and user.has_permission('invoices.print'))); self.print_btn.clicked.connect(self.print_selected); h.addWidget(self.print_btn); self.pdf_btn=QPushButton('Save PDF'); self.pdf_btn.setIcon(icon('save')); self.pdf_btn.setEnabled(bool(user and user.has_permission('invoices.print'))); self.pdf_btn.clicked.connect(self.save_selected_pdf); h.addWidget(self.pdf_btn); self.void_btn=QPushButton('Void invoice'); self.void_btn.setIcon(icon('delete')); self.void_btn.setEnabled(bool(user and user.is_admin())); self.void_btn.clicked.connect(self.void_selected); h.addWidget(self.void_btn); self.delete_draft_btn=QPushButton('Delete draft'); self.delete_draft_btn.setIcon(icon('delete')); self.delete_draft_btn.setEnabled(bool(user and user.has_permission('invoices.view'))); self.delete_draft_btn.clicked.connect(self.delete_selected_draft); h.addWidget(self.delete_draft_btn); l.addLayout(h); self.table=QTableWidget(0,5); self.table.setHorizontalHeaderLabels(['Invoice','Customer','Subtotal','Total','Status']); self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); setup_table(self.table); self.table.cellDoubleClicked.connect(self.preview); l.addWidget(self.table,1); self.load()
     def load(self):
         rows=self.sales.search_sales(self.search_box.text()) if self.search_box.text().strip() else self.sales.get_recent_sales(); self.rows=rows; self.table.setRowCount(len(rows))
         for r,s in enumerate(rows):
@@ -1300,6 +1412,42 @@ class InvoicesPage(QWidget):
         s=self.rows[r]; customer_lines='\n'.join(value for value in (s.customer_name, s.customer_phone, s.customer_email, s.customer_city) if value); QMessageBox.information(self,'Invoice',f'{s.invoice_number}\n{customer_lines}\nTotal: {money(s.total)}\n\nInvoice preview is ready for printing through the printer service.')
     def _selected_invoice(self):
         row=self.table.currentRow(); return self.rows[row] if 0 <= row < len(self.rows) else None
+    def _invoice_document(self, sale):
+        document = QTextDocument()
+        document.setHtml(invoice_html(sale, invoice_design_settings()))
+        return document
+    @staticmethod
+    def _configure_invoice_printer(printer, values):
+        if values['paper_size'] == 'A4': printer.setPageSize(QPageSize(QPageSize.A4))
+        elif values['paper_size'] == 'A5': printer.setPageSize(QPageSize(QPageSize.A5))
+        else: printer.setPageSize(QPageSize(QSizeF(80, 220), QPageSize.Millimeter))
+        printer.setPageOrientation(QPageLayout.Landscape if values['orientation'] == 'Landscape' else QPageLayout.Portrait)
+    def open_invoice_settings(self):
+        if InvoiceSettingsDialog(self).exec() == QDialog.Accepted:
+            QMessageBox.information(self, 'Invoice settings saved', 'Your saved design will be used for invoice printing and PDF export.')
+    def _selected_full_sale(self):
+        selected = self._selected_invoice()
+        return self.sales.get_sale_by_invoice_number(selected.invoice_number) if selected else None
+    def print_selected(self):
+        sale = self._selected_full_sale()
+        if not sale:
+            QMessageBox.information(self, 'Select invoice', 'Select an invoice to print.')
+            return
+        printer = QPrinter(QPrinter.HighResolution)
+        self._configure_invoice_printer(printer, invoice_design_settings())
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec() == QDialog.Accepted:
+            self._invoice_document(sale).print_(printer)
+            AuditService().log_action('INVOICE_PRINTED', 'INVOICE', sale.id, self.user.id if self.user else 0, details=f'Invoice: {sale.invoice_number}')
+    def save_selected_pdf(self):
+        sale = self._selected_full_sale()
+        if not sale:
+            QMessageBox.information(self, 'Select invoice', 'Select an invoice to save as PDF.')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Save invoice PDF', f'{sale.invoice_number}.pdf', 'PDF files (*.pdf)')
+        if not path: return
+        printer = QPrinter(QPrinter.HighResolution); self._configure_invoice_printer(printer, invoice_design_settings()); printer.setOutputFormat(QPrinter.PdfFormat); printer.setOutputFileName(path)
+        self._invoice_document(sale).print_(printer)
     def void_selected(self):
         sale=self._selected_invoice()
         if not sale:return
@@ -1854,6 +2002,100 @@ class PermissionsPage(QWidget):
         scroll.setWidget(body)
         layout.addWidget(scroll, 1)
 
+class ResetSelectionDialog(QDialog):
+    """Checkable reset picker; choosing full reset selects every data group."""
+    OPTIONS = [
+        ('inventory', 'Clear inventory (permanently delete products and categories)'),
+        ('customers', 'Clear customers (permanently delete customers and vehicles)'),
+        ('quotations', 'Clear quotations (permanently delete quotations)'),
+        ('sales_invoices', 'Clear sales/invoices (permanently delete sales; no stock restoration)'),
+        ('returns', 'Clear returns (permanently delete return records)'),
+        ('stock_movements', 'Clear stock movements (inventory history)'),
+        ('analytics', 'Clear analytics data (dashboard activity)'),
+        ('reports', 'Clear reports data (generated-report activity)'),
+        ('users', 'Clear users (keep the logged-in administrator only)'),
+        ('settings', 'Clear application settings (restore defaults)'),
+        ('full', 'Full system reset (all of the above)'),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('System Reset / Data Cleanup')
+        self.setMinimumWidth(700)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel('Select data to permanently clear:'))
+        self.combo = QComboBox()
+        self.combo.setPlaceholderText('Select data to clear')
+        self.model = QStandardItemModel(self.combo)
+        for code, label in self.OPTIONS:
+            item = QStandardItem(label)
+            item.setData(code, Qt.UserRole)
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            item.setData(Qt.Unchecked, Qt.CheckStateRole)
+            self.model.appendRow(item)
+        self.combo.setModel(self.model)
+        self.model.itemChanged.connect(self._sync_full_selection)
+        layout.addWidget(self.combo)
+        warning = QLabel('A database backup is created first. Selected records are permanently deleted and cannot be restored from within the application.')
+        warning.setWordWrap(True)
+        warning.setObjectName('muted')
+        layout.addWidget(warning)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._syncing = False
+
+    def _sync_full_selection(self, changed):
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            full_item = self.model.item(self.model.rowCount() - 1)
+            if changed is full_item:
+                state = full_item.checkState()
+                for row in range(self.model.rowCount() - 1):
+                    self.model.item(row).setCheckState(state)
+            else:
+                all_checked = all(self.model.item(row).checkState() == Qt.Checked for row in range(self.model.rowCount() - 1))
+                full_item.setCheckState(Qt.Checked if all_checked else Qt.Unchecked)
+        finally:
+            self._syncing = False
+
+    def selections(self):
+        return {
+            self.model.item(row).data(Qt.UserRole)
+            for row in range(self.model.rowCount())
+            if self.model.item(row).checkState() == Qt.Checked
+        }
+
+    def accept(self):
+        if not self.selections():
+            QMessageBox.information(self, 'Select data', 'Select at least one data group to reset.')
+            return
+        super().accept()
+
+class DestructiveConfirmationDialog(QDialog):
+    """A deliberate checkbox confirmation for irreversible reset actions."""
+    def __init__(self, title, message, acknowledgement, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        text = QLabel(message)
+        text.setWordWrap(True)
+        layout.addWidget(text)
+        self.confirmation = QCheckBox(acknowledgement)
+        layout.addWidget(self.confirmation)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.ok_button = buttons.button(QDialogButtonBox.Ok)
+        self.ok_button.setText('Confirm')
+        self.ok_button.setEnabled(False)
+        self.confirmation.toggled.connect(self.ok_button.setEnabled)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
 class SettingsPage(QWidget):
     def __init__(self, user=None):
         super().__init__(); self.user=user; from database.db import get_database_manager; self.db=get_database_manager(); l=QVBoxLayout(self); l.setContentsMargins(28,22,28,28); l.setSpacing(14); t=QLabel('Settings'); t.setObjectName('pageTitle'); l.addWidget(t); d=QLabel('Manage business defaults and offline-first operating preferences.'); d.setObjectName('muted'); l.addWidget(d)
@@ -1863,7 +2105,10 @@ class SettingsPage(QWidget):
         sync_panel,sync_layout=panel('Offline and synchronization','Local-first reliability'); form=QFormLayout(); self.sync_mode=QComboBox(); self.sync_mode.addItems(['Offline-first','Online preferred']); form.addRow('Operating mode',self.sync_mode); self.endpoint=QLineEdit(); self.endpoint.setPlaceholderText('Optional sync endpoint'); form.addRow('Sync endpoint',self.endpoint); sync_layout.addLayout(form); grid.addWidget(sync_panel,1,0)
         printer,printer_layout=panel('Printer and backup','Hardware and data safety'); form=QFormLayout(); self.printer=QLineEdit(); self.printer.setPlaceholderText('Default printer name'); form.addRow('Receipt printer',self.printer); self.backup=QCheckBox('Remind me to back up the database'); form.addRow('',self.backup); printer_layout.addLayout(form); grid.addWidget(printer,1,1)
         if user and user.is_admin():
-            cleanup,cleanup_layout=panel('System Reset / Data Cleanup','Backup-first administrative cleanup; financial history is voided, not deleted'); cleanup_btn=QPushButton('System Reset / Data Cleanup'); cleanup_btn.setIcon(icon('warning')); cleanup_btn.clicked.connect(self.run_cleanup); cleanup_layout.addWidget(cleanup_btn); l.addWidget(cleanup)
+            cleanup,cleanup_layout=panel('System Reset / Data Cleanup','Backup-first permanent deletion of selected operational data')
+            cleanup_btn=QPushButton('Choose data to clear'); cleanup_btn.setIcon(icon('warning')); cleanup_btn.clicked.connect(self.run_cleanup); cleanup_layout.addWidget(cleanup_btn)
+            clear_all_btn=QPushButton('Clear all application data'); clear_all_btn.setObjectName('danger'); clear_all_btn.setIcon(icon('delete')); clear_all_btn.setToolTip('Permanently delete all application data except this administrator account'); clear_all_btn.clicked.connect(self.clear_all_application_data); cleanup_layout.addWidget(clear_all_btn)
+            l.addWidget(cleanup)
         actions=QHBoxLayout(); actions.addStretch(); b=QPushButton('Save settings'); b.setObjectName('primary'); b.setIcon(icon('settings')); b.clicked.connect(self.save); actions.addWidget(b); l.addLayout(actions); l.addStretch(); self.load()
     def load(self):
         rows=self.db.execute_query('SELECT key,value FROM settings'); values={x['key']:x['value'] for x in rows}; self.shop.setText(values.get('company_name') or 'Online Motor Spares'); self.tagline.setText(values.get('tagline','')); self.phone.setText(values.get('company_phone','')); self.currency.setCurrentText(values.get('currency') or configured_currency()); self.tax.setText(values.get('tax_rate','15')); self.sync_mode.setCurrentText(values.get('sync_mode','Offline-first')); self.endpoint.setText(values.get('sync_endpoint','')); self.printer.setText(values.get('printer_name','')); self.receipt.setChecked(values.get('auto_print','0')=='1'); self.backup.setChecked(values.get('backup_reminder','0')=='1')
@@ -1876,17 +2121,50 @@ class SettingsPage(QWidget):
         except Exception as e:QMessageBox.critical(self,'Could not save settings',str(e))
     def run_cleanup(self):
         if not self.user or not self.user.is_admin(): QMessageBox.warning(self,'Permission denied','Only an administrator can run system cleanup.'); return
-        options=['Clear inventory (archive active products)','Clear customers (archive customers and vehicles)','Clear quotations (cancel open quotations)','Clear sales/invoices (void completed invoices and restore stock)','Full system reset (all of the above)']
-        choice,ok=QInputDialog.getItem(self,'System Reset / Data Cleanup','Choose data cleanup:',options,0,False)
-        if not ok:return
-        confirm,ok=QInputDialog.getText(self,'Confirm system cleanup','Type RESET SYSTEM to create a backup and continue:')
-        if not ok or confirm.strip().upper() != 'RESET SYSTEM':return
-        option={'Clear inventory (archive active products)':'inventory','Clear customers (archive customers and vehicles)':'customers','Clear quotations (cancel open quotations)':'quotations','Clear sales/invoices (void completed invoices and restore stock)':'sales_invoices','Full system reset (all of the above)':'full'}[choice]
+        dialog = ResetSelectionDialog(self)
+        if dialog.exec() != QDialog.Accepted:return
+        selections = dialog.selections()
+        confirmation = DestructiveConfirmationDialog(
+            'Confirm permanent reset',
+            'A backup will be created first. The selected data will then be permanently deleted and cannot be restored from within the application.',
+            'Yes, permanently delete the selected data', self,
+        )
+        if confirmation.exec() != QDialog.Accepted:return
         try:
             from services.admin_cleanup_service import AdminCleanupService
-            result=AdminCleanupService().cleanup(option,self.user.id)
-            QMessageBox.information(self,'Cleanup completed',f"Backup: {result['backup']}\nArchived products: {result['archived_products']}\nArchived customers: {result['archived_customers']}\nCancelled quotations: {result['cancelled_quotes']}\nVoided invoices: {result['voided_invoices']}")
+            result=AdminCleanupService().reset(selections,self.user.id)
+            self.load()
+            removed = '\n'.join(f"{name.replace('_', ' ').title()}: {count}" for name,count in result.items() if isinstance(count, int)) or 'No matching records remained.'
+            QMessageBox.information(self,'Reset completed',f"The selected data was permanently deleted.\n\nBackup: {result['backup']}\n\n{removed}")
         except Exception as exc: QMessageBox.critical(self,'Cleanup failed',str(exc))
+    def clear_all_application_data(self):
+        if not self.user or not self.user.is_admin():
+            QMessageBox.warning(self, 'Permission denied', 'Only an administrator can clear application data.')
+            return
+        warning = QMessageBox.warning(
+            self, 'Clear all application data',
+            'This permanently deletes products, customers, vehicles, quotations, sales, invoices, returns, stock history, reports, settings, and other user accounts.\n\nA backup will be created first. Only your current administrator account, roles, and permission definitions will remain.\n\nContinue?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if warning != QMessageBox.Yes:
+            return
+        confirmation = DestructiveConfirmationDialog(
+            'Final confirmation',
+            'This action permanently wipes all application data. It cannot be undone from within the application.',
+            'Yes, delete all application data', self,
+        )
+        if confirmation.exec() != QDialog.Accepted:
+            return
+        try:
+            from services.admin_cleanup_service import AdminCleanupService
+            result = AdminCleanupService().reset({'full'}, self.user.id)
+            self.load()
+            QMessageBox.information(
+                self, 'Application data cleared',
+                f"All application data was permanently deleted.\n\nBackup: {result['backup']}\n\nYour administrator account remains active.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, 'Could not clear application data', str(exc))
 
 class CustomersPage(QWidget):
     def __init__(self):
@@ -1920,7 +2198,7 @@ class MotorSparesPOSTestWindow(QMainWindow):
     logout_requested = Signal()
 
     def __init__(self,user=None):
-        super().__init__(); self.user=user; self.setWindowTitle('Online Motor Spares POS - Michoe Tech Labs'); self.resize(1440,900); self.setMinimumSize(1100,680); self.setStyleSheet(STYLESHEET); self.products=ProductService(); self.inventory=InventoryService(); self.stack=QStackedWidget(); self.pages={}; self.nav={}; self.build(); self._setup_auto_sync(); subscribe_data_changed(self._on_data_changed)
+        super().__init__(); self.user=user; self.setWindowTitle('Online Motor Spares POS - Michoe Tech Labs'); self.resize(1440,900); self.setMinimumSize(1100,680); self.setStyleSheet(STYLESHEET); self.products=ProductService(); self.inventory=InventoryService(); self.stack=QStackedWidget(); self.pages={}; self.nav={}; self.build(); self._setup_auto_sync(); subscribe_data_changed(self._on_data_changed); QTimer.singleShot(1200, self._show_backup_reminder)
     def build(self):
         c=QWidget(); c.setObjectName('canvas'); self.setCentralWidget(c); outer=QHBoxLayout(c); outer.setContentsMargins(0,0,0,0); outer.setSpacing(0); side=QFrame(); side.setFixedWidth(244); side.setStyleSheet(f'background:{COLORS["nav"]};'); sl=QVBoxLayout(side); sl.setContentsMargins(18,24,18,18); brand=QLabel('MICHOE TECH LABS'); brand.setObjectName('brand'); sl.addWidget(brand); sub=QLabel('Online Motor Spares'); sub.setObjectName('brandSub'); sl.addWidget(sub); sl.addSpacing(24)
         entries=[]
@@ -1952,6 +2230,15 @@ class MotorSparesPOSTestWindow(QMainWindow):
         self._sync_timer.timeout.connect(self._auto_sync)
         self._sync_timer.start()
         QTimer.singleShot(1500, self._auto_sync)
+
+    def _show_backup_reminder(self):
+        """Honor the Settings backup-reminder checkbox once per application start."""
+        try:
+            rows = get_database_manager().execute_query("SELECT value FROM settings WHERE key='backup_reminder'")
+            if rows and rows[0]['value'] == '1':
+                QMessageBox.information(self, 'Backup reminder', 'Remember to create a database backup before making major changes.')
+        except Exception:
+            logger.exception('Could not check the backup reminder setting')
 
     def _auto_sync(self):
         """Attempt synchronization in a daemon thread so the POS stays responsive."""

@@ -16,6 +16,7 @@ from services.inventory_service import InventoryService
 from services.sync_service import SyncService
 from services.permission_service import PermissionService
 from services.audit_service import AuditService
+from core.events import emit_change
 import json
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,7 @@ class SalesService:
         if round(paid + 1e-9, 2) < round(float(sale.total), 2):
             raise ValueError(f"Payment is short by {sale.total - paid:.2f}")
 
-    def complete_sale(self, sale: Sale) -> int:
+    def complete_sale(self, sale: Sale, customer_details: Optional[dict] = None) -> int:
         """
         Complete a sale and save to database.
         Updates inventory, creates invoice, and syncs.
@@ -218,6 +219,7 @@ class SalesService:
             )
             
             with self.db.transaction() as conn:
+                self._attach_checkout_customer(conn, sale, customer_details)
                 sale.id = conn.execute(sale_query, params).lastrowid
 
                 # Insert sale items and deduct stock on the same connection.
@@ -304,11 +306,54 @@ class SalesService:
             logger.info(f"Sale completed: {invoice_number} (ID: {sale.id})")
             self.sync.enqueue("SALE", sale.id, "CREATE", json.dumps(sale.to_dict()))
             self.sync.request_background_sync()
+            emit_change('SALE', {'sale_id': sale.id, 'customer_id': sale.customer_id})
             return sale.id
         
         except Exception as e:
             logger.error(f"Failed to complete sale: {e}")
             raise
+
+    @staticmethod
+    def _attach_checkout_customer(conn, sale: Sale, details: Optional[dict]) -> None:
+        """Resolve/create the POS customer and vehicle inside the sale transaction."""
+        details = details or {}
+        if not details.get('name', '').strip():
+            # A true walk-in sale deliberately has no CRM customer record.
+            sale.customer_name = sale.customer_name or 'Walk-in Customer'
+            return
+        customer_id = details.get('id')
+        if not customer_id:
+            phone = (details.get('phone') or '').strip()
+            email = (details.get('email') or '').strip()
+            clauses, values = [], []
+            if phone: clauses.append('phone=?'); values.append(phone)
+            if email: clauses.append('lower(email)=lower(?)'); values.append(email)
+            existing = conn.execute('SELECT id FROM customers WHERE active=1 AND (' + ' OR '.join(clauses) + ') ORDER BY id LIMIT 1', tuple(values)).fetchone() if clauses else None
+            if existing:
+                customer_id = existing['id']
+            else:
+                customer_id = conn.execute(
+                    'INSERT INTO customers(name,phone,email,address,city,vehicle_make,vehicle_model,vehicle_registration,active) VALUES(?,?,?,?,?,?,?,?,1)',
+                    (details['name'].strip(), phone or None, email or None, details.get('address'), details.get('city'), details.get('vehicle_make'), details.get('vehicle_model'), details.get('vehicle_registration')),
+                ).lastrowid
+                conn.execute('UPDATE customers SET customer_code=? WHERE id=?', (f'CUS-{customer_id:06d}', customer_id))
+        sale.customer_id = customer_id
+        sale.customer_name = details['name'].strip()
+        sale.customer_phone = details.get('phone') or None
+        sale.customer_email = details.get('email') or None
+        sale.customer_city = details.get('city') or None
+        sale.vehicle_make = details.get('vehicle_make') or None
+        sale.vehicle_model = details.get('vehicle_model') or None
+        sale.vehicle_registration = details.get('vehicle_registration') or None
+        if not sale.vehicle_id and sale.vehicle_registration:
+            vehicle = conn.execute('SELECT id FROM vehicles WHERE registration_number=? AND customer_id=?', (sale.vehicle_registration.strip().upper(), customer_id)).fetchone()
+            if vehicle:
+                sale.vehicle_id = vehicle['id']
+            else:
+                sale.vehicle_id = conn.execute(
+                    'INSERT INTO vehicles(customer_id,registration_number,make,model,year,active) VALUES(?,?,?,?,?,1)',
+                    (customer_id, sale.vehicle_registration.strip().upper(), sale.vehicle_make, sale.vehicle_model, details.get('vehicle_year')),
+                ).lastrowid
 
     def hold_sale(self, cart: dict, customer: Optional[dict], user_id: Optional[int]) -> dict:
         """Persist a POS cart for later resumption without touching inventory."""
@@ -533,6 +578,18 @@ class SalesService:
                 vat_rate=row['vat_rate'], line_total=row['line_total'],
             )
             for row in rows
+        ]
+        payment_rows = self.db.execute_query(
+            "SELECT * FROM payments WHERE sale_id = ? ORDER BY id", (sale.id,)
+        )
+        sale.payments = [
+            Payment(
+                id=row['id'], sale_id=row['sale_id'], payment_method=row['payment_method'],
+                currency=row['currency'], amount=row['amount'], tendered=row['tendered'],
+                change=row['change'], exchange_rate=row['exchange_rate'], status=row['status'],
+                created_at=row['created_at'],
+            )
+            for row in payment_rows
         ]
         return sale
 

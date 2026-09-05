@@ -34,18 +34,28 @@ class AdminTaxReturnsTests(unittest.TestCase):
         self.assertEqual(1, TaxReportService().export_xlsx(str(export_path), '2000-01-01', '2100-01-01'))
         self.assertTrue(export_path.exists())
 
-    def test_cleanup_creates_backup_archives_inventory_and_denies_cashier(self):
-        cleanup = AdminCleanupService(); result = cleanup.cleanup('inventory', 1)
-        self.assertTrue(Path(result['backup']).exists()); self.assertEqual(1, result['archived_products'])
-        self.assertEqual(0, self.products.db.execute_query('SELECT COUNT(*) count FROM products WHERE active=1')[0]['count'])
+    def test_reset_creates_backup_permanently_clears_inventory_and_denies_cashier(self):
+        cleanup = AdminCleanupService(); result = cleanup.reset({'inventory'}, 1)
+        self.assertTrue(Path(result['backup']).exists()); self.assertEqual(1, result['products'])
+        self.assertEqual(0, self.products.db.execute_query('SELECT COUNT(*) count FROM products')[0]['count'])
         cashier_id = AuthenticationService().create_user('cleanup_cashier', 'cash123', 'Cleanup Cashier', 3)
-        with self.assertRaises(PermissionError): cleanup.cleanup('inventory', cashier_id)
+        with self.assertRaises(PermissionError): cleanup.reset({'inventory'}, cashier_id)
 
-    def test_sales_cleanup_voids_not_deletes_financial_records(self):
-        result = AdminCleanupService().cleanup('sales_invoices', 1)
-        self.assertEqual(1, result['voided_invoices'])
-        self.assertEqual('VOIDED', self.sales.db.execute_query('SELECT status FROM invoices WHERE invoice_number=?', (self.sale.invoice_number,))[0]['status'])
-        self.assertTrue(self.sales.db.execute_query('SELECT 1 FROM payments WHERE sale_id=?', (self.sale.id,)))
+    def test_sales_reset_permanently_deletes_financial_records(self):
+        result = AdminCleanupService().reset({'sales_invoices'}, 1)
+        self.assertEqual(1, result['sales'])
+        self.assertEqual(1, result['invoices'])
+        self.assertFalse(self.sales.db.execute_query('SELECT 1 FROM invoices WHERE invoice_number=?', (self.sale.invoice_number,)))
+        self.assertFalse(self.sales.db.execute_query('SELECT 1 FROM payments WHERE sale_id=?', (self.sale.id,)))
+
+    def test_full_reset_keeps_only_current_administrator(self):
+        AuthenticationService().create_user('reset_cashier', 'cash123', 'Reset Cashier', 3)
+        result = AdminCleanupService().reset({'full'}, 1)
+        self.assertEqual(1, self.sales.db.execute_query('SELECT COUNT(*) count FROM users')[0]['count'])
+        self.assertEqual(0, self.sales.db.execute_query('SELECT COUNT(*) count FROM products')[0]['count'])
+        self.assertEqual(0, self.sales.db.execute_query('SELECT COUNT(*) count FROM invoices')[0]['count'])
+        self.assertEqual(1, self.sales.db.execute_query("SELECT COUNT(*) count FROM audit_logs WHERE action='SYSTEM_DATA_RESET'")[0]['count'])
+        self.assertEqual(set(AdminCleanupService.ALL_OPTIONS), set(result['selected']))
 
 
 if __name__ == '__main__': unittest.main()
