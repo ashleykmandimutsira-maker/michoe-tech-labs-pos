@@ -154,17 +154,30 @@ class SalesService:
         logger.info(f"Payment added to sale: {amount} {currency} ({payment_method})")
         return payment
 
-    def validate_payments(self, sale: Sale) -> None:
-        """Reject missing, invalid, or short split tenders before persisting a sale."""
-        if not sale.payments:
-            raise ValueError("Cannot complete sale with no payments")
-        paid = sum(float(payment.amount) for payment in sale.payments)
-        if any(float(payment.amount) <= 0 for payment in sale.payments):
-            raise ValueError("Each payment amount must be greater than zero")
-        if round(paid + 1e-9, 2) < round(float(sale.total), 2):
-            raise ValueError(f"Payment is short by {sale.total - paid:.2f}")
+    def validate_payments(self, sale: Sale, allow_credit: bool = False) -> None:
+        """Validate payments for a sale.
 
-    def complete_sale(self, sale: Sale) -> int:
+        If allow_credit is True, zero or partial payments are allowed and the sale can be completed with an outstanding balance.
+        Otherwise the total of payments must cover the sale total.
+        """
+        # No payments allowed only if credit is permitted
+        if not sale.payments:
+            if not allow_credit:
+                raise ValueError("Cannot complete sale with no payments")
+            paid = 0.0
+        else:
+            if any(float(payment.amount) <= 0 for payment in sale.payments):
+                raise ValueError("Each payment amount must be greater than zero")
+            paid = sum(float(payment.amount) for payment in sale.payments)
+
+        # If not allowing credit, require full payment
+        if not allow_credit and round(paid + 1e-9, 2) < round(float(sale.total), 2):
+            raise ValueError(f"Payment is short by {sale.total - paid:.2f}")
+        # If allowing credit, ensure payments do not exceed total
+        if allow_credit and round(paid - float(sale.total), 2) > 0:
+            raise ValueError(f"Payments exceed sale total by {paid - sale.total:.2f}")
+
+    def complete_sale(self, sale: Sale, allow_credit: bool = False) -> int:
         """
         Complete a sale and save to database.
         Updates inventory, creates invoice, and syncs.
@@ -180,7 +193,7 @@ class SalesService:
         
         sale.status = "COMPLETED"
         sale.recalculate_totals()
-        self.validate_payments(sale)
+        self.validate_payments(sale, allow_credit)
         
         # Generate invoice number
         invoice_number = self._generate_invoice_number()
@@ -272,50 +285,58 @@ class SalesService:
                     conn.execute(payment_query, payment_params)
 
                 # Create invoice record in the same transaction.
+                paid_amount = sum(float(p.amount) for p in sale.payments) if sale.payments else 0.0
+                if paid_amount >= float(sale.total):
+                    invoice_status = 'PAID'
+                elif paid_amount > 0:
+                    invoice_status = 'PARTIALLY_PAID'
+                else:
+                    invoice_status = 'OWING'
+
                 invoice = Invoice(
-                invoice_number=invoice_number,
-                sale_id=sale.id,
-                customer_id=sale.customer_id,
-                customer_name=sale.customer_name,
-                customer_phone=sale.customer_phone,
-                customer_email=sale.customer_email,
-                customer_city=sale.customer_city,
-                vehicle_id=sale.vehicle_id,
-                vehicle_make=sale.vehicle_make,
-                vehicle_model=sale.vehicle_model,
-                vehicle_registration=sale.vehicle_registration,
-                subtotal=sale.subtotal,
-                vat_amount=sale.vat_amount,
-                total=sale.total,
-                payment_method=sale.payments[0].payment_method if sale.payments else "",
-                status="PAID",
-            )
-            
+                    invoice_number=invoice_number,
+                    sale_id=sale.id,
+                    customer_id=sale.customer_id,
+                    customer_name=sale.customer_name,
+                    customer_phone=sale.customer_phone,
+                    customer_email=sale.customer_email,
+                    customer_city=sale.customer_city,
+                    vehicle_id=sale.vehicle_id,
+                    vehicle_make=sale.vehicle_make,
+                    vehicle_model=sale.vehicle_model,
+                    vehicle_registration=sale.vehicle_registration,
+                    subtotal=sale.subtotal,
+                    vat_amount=sale.vat_amount,
+                    total=sale.total,
+                    payment_method=sale.payments[0].payment_method if sale.payments else 'CREDIT',
+                    status=invoice_status,
+                )
+
                 invoice_query = """
                     INSERT INTO invoices (invoice_number, sale_id, customer_id, customer_name, customer_phone, customer_email, customer_city, vehicle_id,
                                          vehicle_make, vehicle_model, vehicle_registration, subtotal, vat_amount, total, payment_method, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-            
+
                 invoice_params = (
-                invoice.invoice_number,
-                sale.id,
-                invoice.customer_id,
-                invoice.customer_name,
-                invoice.customer_phone,
-                invoice.customer_email,
-                invoice.customer_city,
-                invoice.vehicle_id,
-                invoice.vehicle_make,
-                invoice.vehicle_model,
-                invoice.vehicle_registration,
-                invoice.subtotal,
-                invoice.vat_amount,
-                invoice.total,
-                invoice.payment_method,
-                invoice.status,
-            )
-            
+                    invoice.invoice_number,
+                    sale.id,
+                    invoice.customer_id,
+                    invoice.customer_name,
+                    invoice.customer_phone,
+                    invoice.customer_email,
+                    invoice.customer_city,
+                    invoice.vehicle_id,
+                    invoice.vehicle_make,
+                    invoice.vehicle_model,
+                    invoice.vehicle_registration,
+                    invoice.subtotal,
+                    invoice.vat_amount,
+                    invoice.total,
+                    invoice.payment_method,
+                    invoice.status,
+                )
+
                 conn.execute(invoice_query, invoice_params)
             
             logger.info(f"Sale completed: {invoice_number} (ID: {sale.id})")
