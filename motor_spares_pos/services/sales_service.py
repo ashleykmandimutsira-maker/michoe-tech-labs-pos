@@ -16,7 +16,6 @@ from services.inventory_service import InventoryService
 from services.sync_service import SyncService
 from services.permission_service import PermissionService
 from services.audit_service import AuditService
-from core.events import emit_change
 import json
 
 logger = logging.getLogger(__name__)
@@ -155,17 +154,30 @@ class SalesService:
         logger.info(f"Payment added to sale: {amount} {currency} ({payment_method})")
         return payment
 
-    def validate_payments(self, sale: Sale) -> None:
-        """Reject missing, invalid, or short split tenders before persisting a sale."""
-        if not sale.payments:
-            raise ValueError("Cannot complete sale with no payments")
-        paid = sum(float(payment.amount) for payment in sale.payments)
-        if any(float(payment.amount) <= 0 for payment in sale.payments):
-            raise ValueError("Each payment amount must be greater than zero")
-        if round(paid + 1e-9, 2) < round(float(sale.total), 2):
-            raise ValueError(f"Payment is short by {sale.total - paid:.2f}")
+    def validate_payments(self, sale: Sale, allow_credit: bool = False) -> None:
+        """Validate payments for a sale.
 
-    def complete_sale(self, sale: Sale, customer_details: Optional[dict] = None) -> int:
+        If allow_credit is True, zero or partial payments are allowed and the sale can be completed with an outstanding balance.
+        Otherwise the total of payments must cover the sale total.
+        """
+        # No payments allowed only if credit is permitted
+        if not sale.payments:
+            if not allow_credit:
+                raise ValueError("Cannot complete sale with no payments")
+            paid = 0.0
+        else:
+            if any(float(payment.amount) <= 0 for payment in sale.payments):
+                raise ValueError("Each payment amount must be greater than zero")
+            paid = sum(float(payment.amount) for payment in sale.payments)
+
+        # If not allowing credit, require full payment
+        if not allow_credit and round(paid + 1e-9, 2) < round(float(sale.total), 2):
+            raise ValueError(f"Payment is short by {sale.total - paid:.2f}")
+        # If allowing credit, ensure payments do not exceed total
+        if allow_credit and round(paid - float(sale.total), 2) > 0:
+            raise ValueError(f"Payments exceed sale total by {paid - sale.total:.2f}")
+
+    def complete_sale(self, sale: Sale, allow_credit: bool = False) -> int:
         """
         Complete a sale and save to database.
         Updates inventory, creates invoice, and syncs.
@@ -181,7 +193,7 @@ class SalesService:
         
         sale.status = "COMPLETED"
         sale.recalculate_totals()
-        self.validate_payments(sale)
+        self.validate_payments(sale, allow_credit)
         
         # Generate invoice number
         invoice_number = self._generate_invoice_number()
@@ -195,31 +207,47 @@ class SalesService:
                                   subtotal, vat_amount, discount_amount, total, status, notes, quotation_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            
-            params = (
-                invoice_number,
-                sale.customer_id,
-                sale.customer_name,
-                sale.customer_phone,
-                sale.customer_email,
-                sale.customer_city,
-                sale.vehicle_id,
-                sale.vehicle_make,
-                sale.vehicle_model,
-                sale.vehicle_registration,
-                sale.user_id,
-                sale.cashier_name,
-                sale.subtotal,
-                sale.vat_amount,
-                sale.discount_amount,
-                sale.total,
-                sale.status,
-                sale.notes,
-                getattr(sale, '_quotation_id', None),
-            )
-            
+
             with self.db.transaction() as conn:
-                self._attach_checkout_customer(conn, sale, customer_details)
+                # If cashier provided customer details but no existing customer id, find or create within the transaction
+                if not sale.customer_id and sale.customer_name:
+                    try:
+                        sale.customer_id = self._find_or_create_customer_tx(
+                            conn,
+                            sale.customer_name,
+                            sale.customer_phone,
+                            sale.customer_email,
+                            sale.vehicle_make,
+                            sale.vehicle_model,
+                            sale.vehicle_registration,
+                            sale.customer_city,
+                        )
+                    except Exception as e:
+                        logger.exception("Failed to find or create customer during sale completion: %s", e)
+                        raise
+
+                params = (
+                    invoice_number,
+                    sale.customer_id,
+                    sale.customer_name,
+                    sale.customer_phone,
+                    sale.customer_email,
+                    sale.customer_city,
+                    sale.vehicle_id,
+                    sale.vehicle_make,
+                    sale.vehicle_model,
+                    sale.vehicle_registration,
+                    sale.user_id,
+                    sale.cashier_name,
+                    sale.subtotal,
+                    sale.vat_amount,
+                    sale.discount_amount,
+                    sale.total,
+                    sale.status,
+                    sale.notes,
+                    getattr(sale, '_quotation_id', None),
+                )
+
                 sale.id = conn.execute(sale_query, params).lastrowid
 
                 # Insert sale items and deduct stock on the same connection.
@@ -257,103 +285,68 @@ class SalesService:
                     conn.execute(payment_query, payment_params)
 
                 # Create invoice record in the same transaction.
+                paid_amount = sum(float(p.amount) for p in sale.payments) if sale.payments else 0.0
+                if paid_amount >= float(sale.total):
+                    invoice_status = 'PAID'
+                elif paid_amount > 0:
+                    invoice_status = 'PARTIALLY_PAID'
+                else:
+                    invoice_status = 'OWING'
+
                 invoice = Invoice(
-                invoice_number=invoice_number,
-                sale_id=sale.id,
-                customer_id=sale.customer_id,
-                customer_name=sale.customer_name,
-                customer_phone=sale.customer_phone,
-                customer_email=sale.customer_email,
-                customer_city=sale.customer_city,
-                vehicle_id=sale.vehicle_id,
-                vehicle_make=sale.vehicle_make,
-                vehicle_model=sale.vehicle_model,
-                vehicle_registration=sale.vehicle_registration,
-                subtotal=sale.subtotal,
-                vat_amount=sale.vat_amount,
-                total=sale.total,
-                payment_method=sale.payments[0].payment_method if sale.payments else "",
-                status="PAID",
-            )
-            
+                    invoice_number=invoice_number,
+                    sale_id=sale.id,
+                    customer_id=sale.customer_id,
+                    customer_name=sale.customer_name,
+                    customer_phone=sale.customer_phone,
+                    customer_email=sale.customer_email,
+                    customer_city=sale.customer_city,
+                    vehicle_id=sale.vehicle_id,
+                    vehicle_make=sale.vehicle_make,
+                    vehicle_model=sale.vehicle_model,
+                    vehicle_registration=sale.vehicle_registration,
+                    subtotal=sale.subtotal,
+                    vat_amount=sale.vat_amount,
+                    total=sale.total,
+                    payment_method=sale.payments[0].payment_method if sale.payments else 'CREDIT',
+                    status=invoice_status,
+                )
+
                 invoice_query = """
                     INSERT INTO invoices (invoice_number, sale_id, customer_id, customer_name, customer_phone, customer_email, customer_city, vehicle_id,
                                          vehicle_make, vehicle_model, vehicle_registration, subtotal, vat_amount, total, payment_method, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
-            
+
                 invoice_params = (
-                invoice.invoice_number,
-                sale.id,
-                invoice.customer_id,
-                invoice.customer_name,
-                invoice.customer_phone,
-                invoice.customer_email,
-                invoice.customer_city,
-                invoice.vehicle_id,
-                invoice.vehicle_make,
-                invoice.vehicle_model,
-                invoice.vehicle_registration,
-                invoice.subtotal,
-                invoice.vat_amount,
-                invoice.total,
-                invoice.payment_method,
-                invoice.status,
-            )
-            
+                    invoice.invoice_number,
+                    sale.id,
+                    invoice.customer_id,
+                    invoice.customer_name,
+                    invoice.customer_phone,
+                    invoice.customer_email,
+                    invoice.customer_city,
+                    invoice.vehicle_id,
+                    invoice.vehicle_make,
+                    invoice.vehicle_model,
+                    invoice.vehicle_registration,
+                    invoice.subtotal,
+                    invoice.vat_amount,
+                    invoice.total,
+                    invoice.payment_method,
+                    invoice.status,
+                )
+
                 conn.execute(invoice_query, invoice_params)
             
             logger.info(f"Sale completed: {invoice_number} (ID: {sale.id})")
             self.sync.enqueue("SALE", sale.id, "CREATE", json.dumps(sale.to_dict()))
             self.sync.request_background_sync()
-            emit_change('SALE', {'sale_id': sale.id, 'customer_id': sale.customer_id})
             return sale.id
         
         except Exception as e:
             logger.error(f"Failed to complete sale: {e}")
             raise
-
-    @staticmethod
-    def _attach_checkout_customer(conn, sale: Sale, details: Optional[dict]) -> None:
-        """Resolve/create the POS customer and vehicle inside the sale transaction."""
-        details = details or {}
-        if not details.get('name', '').strip():
-            # A true walk-in sale deliberately has no CRM customer record.
-            sale.customer_name = sale.customer_name or 'Walk-in Customer'
-            return
-        customer_id = details.get('id')
-        if not customer_id:
-            phone = (details.get('phone') or '').strip()
-            email = (details.get('email') or '').strip()
-            clauses, values = [], []
-            if phone: clauses.append('phone=?'); values.append(phone)
-            if email: clauses.append('lower(email)=lower(?)'); values.append(email)
-            existing = conn.execute('SELECT id FROM customers WHERE active=1 AND (' + ' OR '.join(clauses) + ') ORDER BY id LIMIT 1', tuple(values)).fetchone() if clauses else None
-            if existing:
-                customer_id = existing['id']
-            else:
-                customer_id = conn.execute(
-                    'INSERT INTO customers(name,phone,email,address,city,vehicle_make,vehicle_model,vehicle_registration,active) VALUES(?,?,?,?,?,?,?,?,1)',
-                    (details['name'].strip(), phone or None, email or None, details.get('address'), details.get('city'), details.get('vehicle_make'), details.get('vehicle_model'), details.get('vehicle_registration')),
-                ).lastrowid
-                conn.execute('UPDATE customers SET customer_code=? WHERE id=?', (f'CUS-{customer_id:06d}', customer_id))
-        sale.customer_id = customer_id
-        sale.customer_name = details['name'].strip()
-        sale.customer_phone = details.get('phone') or None
-        sale.customer_email = details.get('email') or None
-        sale.customer_city = details.get('city') or None
-        sale.vehicle_make = details.get('vehicle_make') or None
-        sale.vehicle_model = details.get('vehicle_model') or None
-        sale.vehicle_registration = details.get('vehicle_registration') or None
-        if not sale.vehicle_id and sale.vehicle_registration:
-            vehicle = conn.execute('SELECT id FROM vehicles WHERE registration_number=? AND customer_id=?', (sale.vehicle_registration.strip().upper(), customer_id)).fetchone()
-            if vehicle:
-                sale.vehicle_id = vehicle['id']
-            else:
-                sale.vehicle_id = conn.execute(
-                    'INSERT INTO vehicles(customer_id,registration_number,make,model,year,active) VALUES(?,?,?,?,?,1)',
-                    (customer_id, sale.vehicle_registration.strip().upper(), sale.vehicle_make, sale.vehicle_model, details.get('vehicle_year')),
-                ).lastrowid
 
     def hold_sale(self, cart: dict, customer: Optional[dict], user_id: Optional[int]) -> dict:
         """Persist a POS cart for later resumption without touching inventory."""
@@ -513,6 +506,45 @@ class SalesService:
                 self.sync.request_background_sync()
         return changed == 1
 
+    def _find_or_create_customer_tx(self, conn, name: str, phone: Optional[str] = None, email: Optional[str] = None,
+                                    vehicle_make: Optional[str] = None, vehicle_model: Optional[str] = None,
+                                    vehicle_registration: Optional[str] = None, city: Optional[str] = None) -> int:
+        """Transaction-safe find or create customer using the provided DB connection.
+        Uses the same heuristics as find_or_create_customer but executes on the given connection so the caller can include it in a larger transaction.
+        """
+        name = (name or "").strip()
+        phone = (phone or "").strip() or None
+        email = (email or "").strip() or None
+        if not name:
+            raise ValueError("Customer name is required.")
+        # Try phone first
+        if phone:
+            row = conn.execute("SELECT id FROM customers WHERE phone = ? ORDER BY id LIMIT 1", (phone,)).fetchone()
+            if row:
+                cid = row["id"] if "id" in row.keys() else row[0]
+                conn.execute("UPDATE customers SET name=?, email=?, city=?, vehicle_make=?, vehicle_model=?, vehicle_registration=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                             (name, email, city, vehicle_make, vehicle_model, vehicle_registration, cid))
+                return cid
+        # Then email
+        if email:
+            row = conn.execute("SELECT id FROM customers WHERE lower(email) = lower(?) ORDER BY id LIMIT 1", (email,)).fetchone()
+            if row:
+                return int(row["id"] if "id" in row.keys() else row[0])
+        # Fallback: match by name+vehicle when no phone/email provided
+        if not phone and not email:
+            row = conn.execute(
+                "SELECT id FROM customers WHERE lower(name) = lower(?) AND COALESCE(vehicle_make, '') = COALESCE(?, '') AND COALESCE(vehicle_model, '') = COALESCE(?, '') AND COALESCE(city, '') = '' ORDER BY id LIMIT 1",
+                (name, vehicle_make, vehicle_model),
+            ).fetchone()
+            if row:
+                return int(row["id"] if "id" in row.keys() else row[0])
+        # Create new customer
+        conn.execute("INSERT INTO customers (name, phone, email, city, vehicle_make, vehicle_model, vehicle_registration) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (name, phone, email, city, vehicle_make, vehicle_model, vehicle_registration))
+        last = conn.execute("SELECT last_insert_rowid() as id").fetchone()
+        customer_id = int(last["id"] if "id" in last.keys() else last[0])
+        return customer_id
+
     def get_customer(self, customer_id: int):
         from models.customer import Customer
         rows = self.db.execute_query("SELECT * FROM customers WHERE id=?", (customer_id,))
@@ -578,18 +610,6 @@ class SalesService:
                 vat_rate=row['vat_rate'], line_total=row['line_total'],
             )
             for row in rows
-        ]
-        payment_rows = self.db.execute_query(
-            "SELECT * FROM payments WHERE sale_id = ? ORDER BY id", (sale.id,)
-        )
-        sale.payments = [
-            Payment(
-                id=row['id'], sale_id=row['sale_id'], payment_method=row['payment_method'],
-                currency=row['currency'], amount=row['amount'], tendered=row['tendered'],
-                change=row['change'], exchange_rate=row['exchange_rate'], status=row['status'],
-                created_at=row['created_at'],
-            )
-            for row in payment_rows
         ]
         return sale
 
