@@ -194,30 +194,47 @@ class SalesService:
                                   subtotal, vat_amount, discount_amount, total, status, notes, quotation_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            
-            params = (
-                invoice_number,
-                sale.customer_id,
-                sale.customer_name,
-                sale.customer_phone,
-                sale.customer_email,
-                sale.customer_city,
-                sale.vehicle_id,
-                sale.vehicle_make,
-                sale.vehicle_model,
-                sale.vehicle_registration,
-                sale.user_id,
-                sale.cashier_name,
-                sale.subtotal,
-                sale.vat_amount,
-                sale.discount_amount,
-                sale.total,
-                sale.status,
-                sale.notes,
-                getattr(sale, '_quotation_id', None),
-            )
-            
+
             with self.db.transaction() as conn:
+                # If cashier provided customer details but no existing customer id, find or create within the transaction
+                if not sale.customer_id and sale.customer_name:
+                    try:
+                        sale.customer_id = self._find_or_create_customer_tx(
+                            conn,
+                            sale.customer_name,
+                            sale.customer_phone,
+                            sale.customer_email,
+                            sale.vehicle_make,
+                            sale.vehicle_model,
+                            sale.vehicle_registration,
+                            sale.customer_city,
+                        )
+                    except Exception as e:
+                        logger.exception("Failed to find or create customer during sale completion: %s", e)
+                        raise
+
+                params = (
+                    invoice_number,
+                    sale.customer_id,
+                    sale.customer_name,
+                    sale.customer_phone,
+                    sale.customer_email,
+                    sale.customer_city,
+                    sale.vehicle_id,
+                    sale.vehicle_make,
+                    sale.vehicle_model,
+                    sale.vehicle_registration,
+                    sale.user_id,
+                    sale.cashier_name,
+                    sale.subtotal,
+                    sale.vat_amount,
+                    sale.discount_amount,
+                    sale.total,
+                    sale.status,
+                    sale.notes,
+                    getattr(sale, '_quotation_id', None),
+                )
+
                 sale.id = conn.execute(sale_query, params).lastrowid
 
                 # Insert sale items and deduct stock on the same connection.
@@ -467,6 +484,45 @@ class SalesService:
                 self.sync.enqueue("CUSTOMER", customer_id, "UPDATE", json.dumps(customer.to_dict()))
                 self.sync.request_background_sync()
         return changed == 1
+
+    def _find_or_create_customer_tx(self, conn, name: str, phone: Optional[str] = None, email: Optional[str] = None,
+                                    vehicle_make: Optional[str] = None, vehicle_model: Optional[str] = None,
+                                    vehicle_registration: Optional[str] = None, city: Optional[str] = None) -> int:
+        """Transaction-safe find or create customer using the provided DB connection.
+        Uses the same heuristics as find_or_create_customer but executes on the given connection so the caller can include it in a larger transaction.
+        """
+        name = (name or "").strip()
+        phone = (phone or "").strip() or None
+        email = (email or "").strip() or None
+        if not name:
+            raise ValueError("Customer name is required.")
+        # Try phone first
+        if phone:
+            row = conn.execute("SELECT id FROM customers WHERE phone = ? ORDER BY id LIMIT 1", (phone,)).fetchone()
+            if row:
+                cid = row["id"] if "id" in row.keys() else row[0]
+                conn.execute("UPDATE customers SET name=?, email=?, city=?, vehicle_make=?, vehicle_model=?, vehicle_registration=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                             (name, email, city, vehicle_make, vehicle_model, vehicle_registration, cid))
+                return cid
+        # Then email
+        if email:
+            row = conn.execute("SELECT id FROM customers WHERE lower(email) = lower(?) ORDER BY id LIMIT 1", (email,)).fetchone()
+            if row:
+                return int(row["id"] if "id" in row.keys() else row[0])
+        # Fallback: match by name+vehicle when no phone/email provided
+        if not phone and not email:
+            row = conn.execute(
+                "SELECT id FROM customers WHERE lower(name) = lower(?) AND COALESCE(vehicle_make, '') = COALESCE(?, '') AND COALESCE(vehicle_model, '') = COALESCE(?, '') AND COALESCE(city, '') = '' ORDER BY id LIMIT 1",
+                (name, vehicle_make, vehicle_model),
+            ).fetchone()
+            if row:
+                return int(row["id"] if "id" in row.keys() else row[0])
+        # Create new customer
+        conn.execute("INSERT INTO customers (name, phone, email, city, vehicle_make, vehicle_model, vehicle_registration) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (name, phone, email, city, vehicle_make, vehicle_model, vehicle_registration))
+        last = conn.execute("SELECT last_insert_rowid() as id").fetchone()
+        customer_id = int(last["id"] if "id" in last.keys() else last[0])
+        return customer_id
 
     def get_customer(self, customer_id: int):
         from models.customer import Customer
